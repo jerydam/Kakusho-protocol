@@ -1,18 +1,6 @@
-// snarkjs_worker.ts — runs Groth16 proof generation via snarkjs inside
-// a dedicated Web Worker, so the heavy WASM math (can take tens of
-// seconds to a few minutes on lower-end phones) never blocks the main
-// thread / UI. This file is the worker's own entry point — it gets
-// instantiated via `new Worker(new URL("./snarkjs_worker.ts", ...))`
-// from prover.ts, not imported directly by application code.
-//
-// Why a worker instead of just `await snarkjs.groth16.fullProve(...)`
-// on the main thread: witness generation + proving for a circuit with
-// a Merkle path (8 levels) and several comparator gadgets is enough
-// constraints that running it synchronously-ish on the main thread
-// will visibly freeze scrolling/animations/input on mobile Safari and
-// older Android WebViews even though JS is technically async — the
-// WASM computation itself is CPU-bound and doesn't yield control back
-// to the event loop the way a network request would.
+// prover/snarkjs_worker.ts — Groth16 proof generation in a Web Worker.
+// Spawned by prover/index.ts. Never imported directly by application code.
+// Requires snarkjs peer dependency.
 
 import * as snarkjs from "snarkjs";
 import type { KycWitness } from "../types";
@@ -47,17 +35,13 @@ export interface ProveFailure {
 type WorkerOutgoingMessage = ProveProgress | ProveSuccess | ProveFailure;
 
 function post(msg: WorkerOutgoingMessage) {
-  // @ts-expect-error — `self` is the worker global scope at runtime
   self.postMessage(msg);
 }
 
 async function fetchAsArrayBuffer(url: string): Promise<Uint8Array> {
   const res = await fetch(url);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-  }
-  const buf = await res.arrayBuffer();
-  return new Uint8Array(buf);
+  if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
+  return new Uint8Array(await res.arrayBuffer());
 }
 
 async function handleProve(req: ProveRequest) {
@@ -69,10 +53,6 @@ async function handleProve(req: ProveRequest) {
     const zkey = await fetchAsArrayBuffer(req.zkeyUrl);
 
     post({ type: "progress", stage: "computing_witness" });
-    // snarkjs.groth16.fullProve takes (input, wasmFile, zkeyFile) and
-    // internally runs witness calculation + proving. Passing
-    // already-fetched Uint8Arrays avoids a second network round trip
-    // inside snarkjs itself.
     post({ type: "progress", stage: "generating_proof" });
 
     const witnessInput = {
@@ -92,11 +72,7 @@ async function handleProve(req: ProveRequest) {
       path_indices: req.witness.path_indices,
     };
 
-    const { proof, publicSignals } = await snarkjs.groth16.fullProve(
-      witnessInput,
-      wasm,
-      zkey
-    );
+    const { proof, publicSignals } = await snarkjs.groth16.fullProve(witnessInput, wasm, zkey);
 
     post({ type: "progress", stage: "done" });
     post({
@@ -109,9 +85,6 @@ async function handleProve(req: ProveRequest) {
   }
 }
 
-// @ts-expect-error — worker global scope
 self.onmessage = (event: MessageEvent<ProveRequest>) => {
-  if (event.data?.type === "prove") {
-    handleProve(event.data);
-  }
+  if (event.data?.type === "prove") handleProve(event.data);
 };

@@ -1,12 +1,8 @@
 // types.ts — the contract between this SDK and kyc_registry's verify()
 // function. If you change kyc_ocr.circom's public signal order, this
 // file, the circuit, and kyc_registry's verify() doc comment all need
-// to change together — see lib.rs's warning about silent mismatches.
+// to change together.
 
-/** Rules an integrator has registered on-chain via kyc_registry. Fetched
- * before proving so the SDK builds a proof against the RIGHT rules —
- * proving against stale/wrong rules just produces a proof verify()
- * will reject. */
 export interface IntegratorConfig {
   integratorId: string; // hex-encoded 32 bytes
   minAgeSeconds: bigint;
@@ -15,11 +11,6 @@ export interface IntegratorConfig {
   active: boolean;
 }
 
-/** Fields extracted from a document via in-browser OCR (see
- * extractors/ocr_worker.ts). Mirrors backend/app/kyc/ocr.py's
- * `run_ocr()` output shape from the original server-side design —
- * deliberately kept similar so any logic you already validated there
- * ports over with minimal changes, just moved to the browser. */
 export interface OcrResult {
   docType: string;
   name: string | null;
@@ -31,10 +22,6 @@ export interface OcrResult {
   confidence: number;
 }
 
-/** The full private witness for kyc_ocr.circom, built entirely
- * client-side from OcrResult + the integrator's bracket tree. NEVER
- * sent anywhere — only used locally to generate a proof, then
- * discarded. */
 export interface KycWitness {
   // public
   current_timestamp: string;
@@ -54,9 +41,6 @@ export interface KycWitness {
   path_indices: string[];
 }
 
-/** Groth16 proof + the public signals it was generated against, ready
- * to submit to kyc_registry.verify(). This is the ONLY thing that
- * leaves the browser besides the integrator's already-public rules. */
 export interface KycProofResult {
   proofA: Uint8Array; // 64 bytes
   proofB: Uint8Array; // 128 bytes
@@ -79,10 +63,6 @@ export interface RestrictedTreeBracket {
   restrictedRoot: string;
 }
 
-/** Where the SDK fetches the compiled circuit + proving key from. These
- * are large (the zkey can be several MB) — host on a CDN, not your own
- * origin if you can avoid it, and set long cache headers since they
- * only change when you re-run trusted_setup.sh. */
 export interface ProverAssetUrls {
   wasmUrl: string;
   zkeyUrl: string;

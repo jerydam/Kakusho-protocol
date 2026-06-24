@@ -1,30 +1,6 @@
-// ocr_worker.ts — browser-side document OCR, ported from the original
-// backend/app/kyc/ocr.py (server-side Tesseract + OpenCV pipeline).
-//
-// WHAT CHANGED FROM THE PYTHON VERSION:
-//   - OpenCV's deskew/CLAHE/adaptive-threshold preprocessing has no
-//     direct Tesseract.js equivalent without pulling in opencv.js
-//     (a multi-MB WASM blob). This version does lighter preprocessing
-//     via Canvas 2D (contrast stretch + grayscale) — sufficient for
-//     well-lit phone-camera captures, weaker than the Python version on
-//     poor lighting/skewed scans. If OCR quality on real documents is
-//     too low, add opencv.js back in for the deskew + CLAHE steps
-//     specifically — those mattered most for low-quality captures in
-//     the original pipeline.
-//   - Multiple-PSM-mode brute-force scoring (Python tried 15 OCR
-//     configs and kept the best) is reduced to ~4 configs here, since
-//     each Tesseract.js call is comparatively much slower in-browser
-//     (no native binary, runs via WASM) and a mobile device doing 15
-//     full-page OCR passes would be a genuinely bad user experience.
-//     If proving accuracy data later shows this hurts extraction
-//     quality, raise the candidate count — start conservative.
-//   - MRZ strip detection (the ink-density row-scan from
-//     _ocr_mrz_strip in the Python version) is ported as-is; that
-//     logic doesn't depend on OpenCV at all in the original, just
-//     numpy array math, which Canvas ImageData replicates directly.
-//
-// All processing happens in a Web Worker (see prover/snarkjs_worker.ts
-// for why) so the main thread / UI never blocks on this.
+// extractors/ocr_worker.ts — browser-side document OCR via Tesseract.js.
+// Ported from backend/app/kyc/ocr.py. Canvas-based preprocessing replaces
+// OpenCV (no opencv.js dependency). MRZ parsing is a direct port.
 
 import Tesseract from "tesseract.js";
 import type { OcrResult } from "../types";
@@ -57,7 +33,7 @@ const NAME_SKIP = new Set([
   "DRIVING", "LICENSE", "LICENCE", "DRIVER", "IDENTITY", "CARD",
 ]);
 
-// ─── Image pre-processing (Canvas-based; see header note re: OpenCV) ──────
+// ─── Image pre-processing ────────────────────────────────────────────────────
 
 async function loadImageToCanvas(file: File | Blob): Promise<HTMLCanvasElement> {
   const img = await createImageBitmap(file);
@@ -75,17 +51,11 @@ function contrastStretchGrayscale(canvas: HTMLCanvasElement): HTMLCanvasElement 
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
 
-  // grayscale
   const gray = new Float32Array(width * height);
   for (let i = 0; i < gray.length; i++) {
-    const r = data[i * 4];
-    const g = data[i * 4 + 1];
-    const b = data[i * 4 + 2];
-    gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
   }
 
-  // 2nd/98th percentile contrast stretch — direct port of the
-  // np.percentile(gray, 2/98) step in preprocess_for_ocr
   const sorted = Float32Array.from(gray).sort();
   const p2 = sorted[Math.floor(sorted.length * 0.02)];
   const p98 = sorted[Math.floor(sorted.length * 0.98)];
@@ -114,39 +84,24 @@ function upscaleIfSmall(canvas: HTMLCanvasElement, minWidth = 1400): HTMLCanvasE
   return out;
 }
 
-// ─── Document type detection (direct port of detect_doc_type) ────────────
+// ─── Document type detection ─────────────────────────────────────────────────
 
 function detectDocType(text: string): string {
   const upper = text.toUpperCase();
-
-  const passportSignals = [
-    "PASSPORT", "PASSEPORT", "PASAPORTE", "PASSAPORTO",
-    "P<NGA", "P<GBR", "P<USA", "P<IND", "P<ZAF", "P<KEN", "P<GHA",
-    "SURNAME", "GIVEN NAMES", "NATIONALITY",
-  ];
-  const drivingSignals = [
-    "DRIVING", "DRIVER", "LICENCE", "LICENSE",
-    "PERMIS DE CONDUIRE", "CONDUCIR", "VEHICLE", "CLASS", "ENDORSEMENT",
-  ];
-  const nationalSignals = [
-    "NATIONAL ID", "IDENTITY CARD", "CARTE NATIONALE",
-    "NATIONAL IDENTITY", "IDENTIFICATION", "NIN", "VOTER", "RESIDENT",
-  ];
-
-  const score = (signals: string[]) =>
-    signals.reduce((acc, s) => acc + (upper.includes(s) ? 1 : 0), 0);
-
+  const passportSignals = ["PASSPORT","PASSEPORT","PASAPORTE","PASSAPORTO","P<NGA","P<GBR","P<USA","P<IND","P<ZAF","P<KEN","P<GHA","SURNAME","GIVEN NAMES","NATIONALITY"];
+  const drivingSignals = ["DRIVING","DRIVER","LICENCE","LICENSE","PERMIS DE CONDUIRE","CONDUCIR","VEHICLE","CLASS","ENDORSEMENT"];
+  const nationalSignals = ["NATIONAL ID","IDENTITY CARD","CARTE NATIONALE","NATIONAL IDENTITY","IDENTIFICATION","NIN","VOTER","RESIDENT"];
+  const score = (signals: string[]) => signals.reduce((acc, s) => acc + (upper.includes(s) ? 1 : 0), 0);
   const scores: Record<string, number> = {
     [DOC_TYPE.PASSPORT]: score(passportSignals),
     [DOC_TYPE.DRIVING]: score(drivingSignals),
     [DOC_TYPE.NATIONAL]: score(nationalSignals),
   };
-
   const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
   return best[1] === 0 ? DOC_TYPE.UNKNOWN : best[0];
 }
 
-// ─── Field extraction regexes (direct port of extract_* functions) ───────
+// ─── Field extraction ────────────────────────────────────────────────────────
 
 function extractName(text: string): string | null {
   const patterns = [
@@ -155,26 +110,20 @@ function extractName(text: string): string | null {
     /(?:Full\s*Name|FULL\s*NAME)[:\s]+([A-Z][A-Za-z\s\-']+)/i,
     /(?:Name|NAME)[:\s]+([A-Z][A-Za-z\s\-']{3,})/i,
   ];
-
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
       const name = m[1].replace(/[\d|\\/].*$/, "").trim();
-      if (!NAME_SKIP.has(name.toUpperCase()) && name.length > 2 && name.length < 80) {
-        return name;
-      }
+      if (!NAME_SKIP.has(name.toUpperCase()) && name.length > 2 && name.length < 80) return name;
     }
   }
-
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (/^[A-Z]{5,20}$/.test(line) && !NAME_SKIP.has(line) && !/^[AN]{4,}$/.test(line)) {
       if (i + 1 < lines.length) {
         const nxt = lines[i + 1];
-        if (/^[A-Z]{2,}(?:\s[A-Z]{2,})+$/.test(nxt) && !NAME_SKIP.has(nxt)) {
-          return `${line} ${nxt}`;
-        }
+        if (/^[A-Z]{2,}(?:\s[A-Z]{2,})+$/.test(nxt) && !NAME_SKIP.has(nxt)) return `${line} ${nxt}`;
       }
       return line;
     }
@@ -249,7 +198,7 @@ function extractNationality(text: string): string | null {
   return null;
 }
 
-// ─── MRZ parsing (direct port of extract_mrz_fields / _parse_mrz_lines) ──
+// ─── MRZ parsing ─────────────────────────────────────────────────────────────
 
 function fixNumeric(s: string): string {
   return s.replace(/O/g, "0").replace(/I/g, "1").replace(/S/g, "5").replace(/B/g, "8");
@@ -278,7 +227,6 @@ interface MrzFields {
 
 function parseMrzLines(line1: string, line2: string): MrzFields {
   const result: MrzFields = {};
-
   try {
     if (line1.startsWith("P") && line1.length >= 5) {
       result.mrzNationality = line1.slice(2, 5).replace(/</g, "");
@@ -290,59 +238,39 @@ function parseMrzLines(line1: string, line2: string): MrzFields {
         if (given) result.mrzGivenNames = given;
       }
     }
-  } catch {
-    // best-effort, matches Python's broad except + debug log
-  }
-
+  } catch { /* best-effort */ }
   try {
     if (line2 && line2.length >= 25) {
       let docRaw = fixNumeric(line2.slice(0, 9));
       if (docRaw[0] === "8") docRaw = "B" + docRaw.slice(1);
       result.mrzDocNumber = docRaw.replace(/</g, "");
-
       const dob = parseYYMMDD(line2.slice(13, 19));
       if (dob) result.mrzDob = dob;
       const exp = parseYYMMDD(line2.slice(19, 25));
       if (exp) result.mrzExpiry = exp;
     }
-  } catch {
-    // best-effort
-  }
-
+  } catch { /* best-effort */ }
   return result;
 }
 
 function extractMrzFields(text: string): MrzFields {
   let line1 = "";
   let line2 = "";
-
   for (const rawLine of text.split("\n")) {
     const cleaned = rawLine.toUpperCase().replace(/[^A-Z0-9<]/g, "");
     if (!line1 && cleaned.startsWith("P") && cleaned.length >= 30) line1 = cleaned;
-    else if (!line2 && !cleaned.startsWith("P") && cleaned.length >= 30 && /^[A-Z0-9]{9}/.test(cleaned)) {
-      line2 = cleaned;
-    }
+    else if (!line2 && !cleaned.startsWith("P") && cleaned.length >= 30 && /^[A-Z0-9]{9}/.test(cleaned)) line2 = cleaned;
     if (line1 && line2) break;
   }
-
   if (!line1 || !line2) {
     const collapsed = text.toUpperCase().replace(/[^A-Z0-9<]/g, "");
-    if (!line1) {
-      const m = collapsed.match(/P[<C][A-Z]{3}[A-Z<]{20,43}/);
-      line1 = m ? m[0] : "";
-    }
-    if (!line2) {
-      const m = collapsed.match(
-        /[A-Z0-9]{9}[0-9][A-Z]{3}[0-9]{6}[0-9][MF<][0-9]{6}[0-9][A-Z0-9<]{14}[0-9]/
-      );
-      line2 = m ? m[0] : "";
-    }
+    if (!line1) { const m = collapsed.match(/P[<C][A-Z]{3}[A-Z<]{20,43}/); line1 = m ? m[0] : ""; }
+    if (!line2) { const m = collapsed.match(/[A-Z0-9]{9}[0-9][A-Z]{3}[0-9]{6}[0-9][MF<][0-9]{6}[0-9][A-Z0-9<]{14}[0-9]/); line2 = m ? m[0] : ""; }
   }
-
   return parseMrzLines(line1, line2);
 }
 
-// ─── Tesseract OCR with multi-config scoring (reduced from 15 to 4 configs) ──
+// ─── Tesseract OCR ────────────────────────────────────────────────────────────
 
 function scoreText(text: string): number {
   let score = 0;
@@ -354,32 +282,23 @@ function scoreText(text: string): number {
       else score += alnum * 2;
     }
   }
-
   const upper = text.toUpperCase();
-  for (const kw of ["PASSPORT", "LICENCE", "LICENSE", "NATIONAL ID", "IDENTITY"]) {
-    if (upper.includes(kw)) score += 80;
-  }
+  for (const kw of ["PASSPORT","LICENCE","LICENSE","NATIONAL ID","IDENTITY"]) if (upper.includes(kw)) score += 80;
   if (/P<[A-Z]{3}/.test(upper)) score += 200;
   if (/[A-Z0-9<]{20,}/.test(text.replace(/\s/g, "").toUpperCase())) score += 100;
   if (/[A-Z]\d{7,9}/.test(upper)) score += 150;
-  for (const kw of ["SURNAME", "GIVEN", "DATE OF BIRTH", "EXPIRY", "NATIONALITY", "NAME", "DOB", "ISSUED", "ADDRESS"]) {
-    if (upper.includes(kw)) score += 40;
-  }
-
+  for (const kw of ["SURNAME","GIVEN","DATE OF BIRTH","EXPIRY","NATIONALITY","NAME","DOB","ISSUED","ADDRESS"]) if (upper.includes(kw)) score += 40;
   return score;
 }
 
 async function extractRawText(canvas: HTMLCanvasElement): Promise<string> {
-  // Reduced candidate set vs. the 15-config Python version — see header.
   const configs: Tesseract.PageSegMode[] = [
     Tesseract.PSM.AUTO,
     Tesseract.PSM.SINGLE_BLOCK,
     Tesseract.PSM.SPARSE_TEXT,
   ];
-
   let bestText = "";
   let bestScore = -9999;
-
   for (const psm of configs) {
     try {
       const { data } = await Tesseract.recognize(canvas, "eng", {
@@ -387,55 +306,37 @@ async function extractRawText(canvas: HTMLCanvasElement): Promise<string> {
         tessedit_pageseg_mode: psm,
       });
       const score = scoreText(data.text);
-      if (score > bestScore) {
-        bestScore = score;
-        bestText = data.text;
-      }
-    } catch {
-      // try next config
-    }
+      if (score > bestScore) { bestScore = score; bestText = data.text; }
+    } catch { /* try next config */ }
   }
-
   return bestText;
 }
 
-// ─── Main entry point ──────────────────────────────────────────────────
+// ─── Main entry point ─────────────────────────────────────────────────────────
 
 export async function runOcr(file: File | Blob): Promise<OcrResult> {
   let canvas = await loadImageToCanvas(file);
   canvas = upscaleIfSmall(canvas);
   canvas = contrastStretchGrayscale(canvas);
-
   const raw = await extractRawText(canvas);
 
   if (!raw.trim()) {
-    throw new OCRError(
-      "No text could be extracted from this document. Please upload a clearer image.",
-      ""
-    );
+    throw new OCRError("No text could be extracted from this document. Please upload a clearer image.", "");
   }
 
   const docType = detectDocType(raw);
-  const mrz = docType === DOC_TYPE.PASSPORT || docType === DOC_TYPE.UNKNOWN
-    ? extractMrzFields(raw)
-    : {};
+  const mrz = docType === DOC_TYPE.PASSPORT || docType === DOC_TYPE.UNKNOWN ? extractMrzFields(raw) : {};
 
-  const name = mrz.mrzSurname
-    ? `${mrz.mrzSurname} ${mrz.mrzGivenNames ?? ""}`.trim()
-    : extractName(raw);
-
+  const name = mrz.mrzSurname ? `${mrz.mrzSurname} ${mrz.mrzGivenNames ?? ""}`.trim() : extractName(raw);
   const dob = extractDateOfBirth(raw) ?? mrz.mrzDob ?? null;
   const docNumber = extractDocumentNumber(raw) ?? mrz.mrzDocNumber ?? null;
   const expiry = extractExpiry(raw) ?? mrz.mrzExpiry ?? null;
   const issueDate = extractIssueDate(raw);
   const nationality = extractNationality(raw) ?? mrz.mrzNationality ?? null;
 
-  const coreFields = [name, dob, docNumber];
-  const extracted = coreFields.filter(Boolean).length;
+  const extracted = [name, dob, docNumber].filter(Boolean).length;
   const minRequired = MIN_FIELDS[docType] ?? 2;
-
-  const allFields = [name, dob, docNumber, expiry, nationality];
-  const confidence = Math.round((allFields.filter(Boolean).length / allFields.length) * 100) / 100;
+  const confidence = Math.round(([name, dob, docNumber, expiry, nationality].filter(Boolean).length / 5) * 100) / 100;
 
   if (extracted < minRequired) {
     const missing: string[] = [];
@@ -443,20 +344,11 @@ export async function runOcr(file: File | Blob): Promise<OcrResult> {
     if (!docNumber) missing.push("document number");
     if (!dob) missing.push("date of birth");
     throw new OCRError(
-      `Could not extract sufficient information from this document (missing: ${missing.join(", ")}). ` +
-        `Please ensure the image is well-lit, in focus, and the document is fully visible.`,
+      `Could not extract sufficient information (missing: ${missing.join(", ")}). ` +
+        `Ensure the image is well-lit, in focus, and the document is fully visible.`,
       raw
     );
   }
 
-  return {
-    docType,
-    name,
-    dateOfBirth: dob,
-    docNumber,
-    expiry,
-    issueDate,
-    nationality,
-    confidence,
-  };
+  return { docType, name, dateOfBirth: dob, docNumber, expiry, issueDate, nationality, confidence };
 }
