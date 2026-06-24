@@ -1,0 +1,22 @@
+{
+  "name": "zk-kyc-circuits",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Circom circuit compilation tooling for the universal kyc_ocr circuit.",
+  "scripts": {
+    "compile": "bash scripts/compile.sh",
+    "setup": "bash scripts/trusted_setup.sh",
+    "export-verifier": "node scripts/generate_verifier.js build/verification_key.json"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "circomlibjs": "^0.1.7",
+    "ffjavascript": "^0.3.0",
+    "snarkjs": "^0.7.4"
+  },
+  "main": "index.js",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
