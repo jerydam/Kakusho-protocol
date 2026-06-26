@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="zk-KYC Relayer",
-    description="Fee-sponsoring relayer for the TrustID ZK KYC protocol on Soroban",
+    description="Fee-sponsoring relayer for the Kakusho ZK KYC protocol on Soroban",
     version="0.1.0",
     lifespan=lifespan,
 )

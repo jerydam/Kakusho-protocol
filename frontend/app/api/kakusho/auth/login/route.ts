@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Keypair } from '@stellar/stellar-sdk';
 import { createHash } from 'crypto';
 
-const RELAYER = process.env.TRUSTID_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
 
 function sep53Hash(message: string): Buffer {
   const prefix = Buffer.from('Stellar Signed Message:\n', 'utf-8');

@@ -59,7 +59,7 @@ export interface RestrictedTreeBracket {
   bracketLow: number;
   bracketHigh: number;
   pathElements: string[];
-  pathIndices: number[];
+  pathIndices: string[];
   restrictedRoot: string;
 }
 

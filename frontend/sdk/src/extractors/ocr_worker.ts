@@ -53,16 +53,16 @@ function contrastStretchGrayscale(canvas: HTMLCanvasElement): HTMLCanvasElement 
 
   const gray = new Float32Array(width * height);
   for (let i = 0; i < gray.length; i++) {
-    gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
+    gray[i] = 0.299 * (data[i * 4] ?? 0) + 0.587 * (data[i * 4 + 1] ?? 0) + 0.114 * (data[i * 4 + 2] ?? 0);
   }
 
   const sorted = Float32Array.from(gray).sort();
-  const p2 = sorted[Math.floor(sorted.length * 0.02)];
-  const p98 = sorted[Math.floor(sorted.length * 0.98)];
+  const p2 = sorted[Math.floor(sorted.length * 0.02)] ?? 0;
+  const p98 = sorted[Math.floor(sorted.length * 0.98)] ?? 0;
   const range = p98 - p2 || 1;
 
   for (let i = 0; i < gray.length; i++) {
-    const v = Math.max(0, Math.min(255, ((gray[i] - p2) / range) * 255));
+    const v = Math.max(0, Math.min(255, (((gray[i] ?? 0) - p2) / range) * 255));
     data[i * 4] = v;
     data[i * 4 + 1] = v;
     data[i * 4 + 2] = v;
@@ -97,7 +97,7 @@ function detectDocType(text: string): string {
     [DOC_TYPE.DRIVING]: score(drivingSignals),
     [DOC_TYPE.NATIONAL]: score(nationalSignals),
   };
-  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0] as [string, number];
   return best[1] === 0 ? DOC_TYPE.UNKNOWN : best[0];
 }
 
@@ -113,16 +113,16 @@ function extractName(text: string): string | null {
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
-      const name = m[1].replace(/[\d|\\/].*$/, "").trim();
+      const name = (m[1] as string).replace(/[\d|\\/].*$/, "").trim();
       if (!NAME_SKIP.has(name.toUpperCase()) && name.length > 2 && name.length < 80) return name;
     }
   }
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i] as string;
     if (/^[A-Z]{5,20}$/.test(line) && !NAME_SKIP.has(line) && !/^[AN]{4,}$/.test(line)) {
       if (i + 1 < lines.length) {
-        const nxt = lines[i + 1];
+        const nxt = lines[i + 1] as string;
         if (/^[A-Z]{2,}(?:\s[A-Z]{2,})+$/.test(nxt) && !NAME_SKIP.has(nxt)) return `${line} ${nxt}`;
       }
       return line;
@@ -140,7 +140,7 @@ function extractDateOfBirth(text: string): string | null {
   ];
   for (const p of patterns) {
     const m = text.match(p);
-    if (m) return m[1].trim();
+    if (m) return (m[1] as string).trim();
   }
   return null;
 }
@@ -155,7 +155,7 @@ function extractDocumentNumber(text: string): string | null {
   for (const p of patterns) {
     const m = text.match(p);
     if (m) {
-      let val = m[1].trim().toUpperCase();
+      let val = (m[1] as string).trim().toUpperCase();
       if (val[0] === "8") val = "B" + val.slice(1);
       if (!/^(NGA|NIG|FED|REP)/.test(val)) return val;
     }
@@ -171,7 +171,7 @@ function extractExpiry(text: string): string | null {
   ];
   for (const p of patterns) {
     const m = text.match(p);
-    if (m) return m[1].trim();
+    if (m) return (m[1] as string).trim();
   }
   return null;
 }
@@ -184,7 +184,7 @@ function extractIssueDate(text: string): string | null {
   ];
   for (const p of patterns) {
     const m = text.match(p);
-    if (m) return m[1].trim();
+    if (m) return (m[1] as string).trim();
   }
   return null;
 }
@@ -192,7 +192,7 @@ function extractIssueDate(text: string): string | null {
 function extractNationality(text: string): string | null {
   const m = text.match(/(?:Nationality|NATIONALITY|Nationalit[eé])[:\s/]+([A-Z][A-Za-z]+)/);
   if (m) {
-    const val = m[1].trim();
+    const val = (m[1] as string).trim();
     if (!["NATIONALITY", "NATIONALE", "NATIONALITE"].includes(val.toUpperCase())) return val;
   }
   return null;
@@ -231,10 +231,10 @@ function parseMrzLines(line1: string, line2: string): MrzFields {
     if (line1.startsWith("P") && line1.length >= 5) {
       result.mrzNationality = line1.slice(2, 5).replace(/</g, "");
       const parts = line1.slice(5).split("<<");
-      const surname = fixNameOcr(parts[0]).replace(/</g, " ").trim();
+      const surname = fixNameOcr(parts[0] as string).replace(/</g, " ").trim();
       if (surname) result.mrzSurname = surname;
       if (parts.length > 1) {
-        const given = fixNameOcr(parts[1]).replace(/</g, " ").trim();
+        const given = fixNameOcr(parts[1] as string).replace(/</g, " ").trim();
         if (given) result.mrzGivenNames = given;
       }
     }
@@ -292,7 +292,7 @@ function scoreText(text: string): number {
 }
 
 async function extractRawText(canvas: HTMLCanvasElement): Promise<string> {
-  const configs: Tesseract.PageSegMode[] = [
+  const configs: Tesseract.PSM[] = [
     Tesseract.PSM.AUTO,
     Tesseract.PSM.SINGLE_BLOCK,
     Tesseract.PSM.SPARSE_TEXT,
@@ -302,7 +302,6 @@ async function extractRawText(canvas: HTMLCanvasElement): Promise<string> {
   for (const psm of configs) {
     try {
       const { data } = await Tesseract.recognize(canvas, "eng", {
-        // @ts-expect-error tesseract.js param typing
         tessedit_pageseg_mode: psm,
       });
       const score = scoreText(data.text);

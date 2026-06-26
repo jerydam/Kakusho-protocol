@@ -5,12 +5,28 @@ Note the layering: an integrator's RULES (min age, restricted root,
 doc max age) live ONLY on-chain via kyc_registry.register_integrator()
 — this backend never duplicates or overrides those. What lives here is
 purely relayer-operational: an API key to authenticate calls to this
-service, a webhook URL/secret, and a daily sponsorship spend limit. An
-integrator could in principle use the protocol entirely without this
-backend (calling kyc_registry directly from their own infrastructure
-and paying their own fees) — this service exists only for integrators
-who want fee sponsorship and/or webhook delivery.
+service, a webhook URL/secret, a daily sponsorship spend limit, and
+(new) which document types this integrator accepts and whether NFC is
+required for them — see app/services/nfc_policy.py. An integrator
+could in principle use the protocol entirely without this backend
+(calling kyc_registry directly from their own infrastructure and
+paying their own fees) — this service exists only for integrators who
+want fee sponsorship and/or webhook delivery.
+
+CHANGES IN THIS REVISION:
+  - allowed_document_types / nfc_policy are now accepted at creation
+    (getattr-with-default, same pattern this file already used for
+    min_age_seconds/doc_max_age_seconds) and stored in the DB, and can
+    be updated afterward via GET/PATCH /me/policy.
+  - min_age_seconds / doc_max_age_seconds are now actually PERSISTED in
+    the integrators row. Previously they were only sent on-chain at
+    registration and never saved here, even though
+    GET /integrators/public/{id} (called by the frontend's
+    app/api/kakusho/verify/integrator-info/route.ts) expects to read
+    them back — that endpoint didn't exist at all before this revision.
+    Both gaps are fixed below.
 """
+import json
 import secrets
 from fastapi import APIRouter, Depends, HTTPException
 import asyncpg
@@ -24,8 +40,14 @@ from app.db.database import get_db
 from app.db.models import IntegratorCreateRequest, IntegratorResponse
 from app.api.auth import generate_api_key, hash_api_key, get_current_integrator
 from app.core.config import settings
-from app.db.database import get_db
-from app.api.auth import get_current_integrator
+from app.services.nfc_policy import (
+    ALL_DOCUMENT_TYPES,
+    ALL_NFC_POLICIES,
+    DEFAULT_ALLOWED_DOCUMENT_TYPES,
+    DEFAULT_NFC_POLICY,
+    parse_allowed_document_types,
+    get_nfc_policy,
+)
 import hashlib
 
 router = APIRouter(prefix="/integrators", tags=["Integrators"])
@@ -34,17 +56,27 @@ from pydantic import BaseModel
 
 BASE_FEE = 100  # 100 stroops
 
+DEFAULT_MIN_AGE_SECONDS = 568025136      # ~18 years, matches the previous inline default
+DEFAULT_DOC_MAX_AGE_SECONDS = 315360000  # ~10 years, matches the previous inline default
+
 
 class RotateByOwnerRequest(BaseModel):
     stellar_address: str
     signed_message: str
     message: str
-    integrator_id: str 
+    integrator_id: str
+
+
+class UpdatePolicyRequest(BaseModel):
+    allowed_document_types: list[str] | None = None
+    nfc_policy: str | None = None
+
 
 def _sep53_hash(message: str) -> bytes:
     prefix = b"Stellar Signed Message:\n"
     payload = prefix + message.encode("utf-8")
     return hashlib.sha256(payload).digest()
+
 
 @router.post("/rotate-by-owner")
 async def rotate_by_owner(
@@ -79,6 +111,7 @@ async def rotate_by_owner(
     )
     return {"api_key": new_key}
 
+
 @router.post("", response_model=IntegratorResponse)
 async def create_integrator(
     body: IntegratorCreateRequest,
@@ -94,12 +127,27 @@ async def create_integrator(
     api_key = generate_api_key()
     webhook_secret = secrets.token_urlsafe(settings.WEBHOOK_SIGNING_SECRET_LENGTH)
 
+    # Resolve once, reuse for both the DB row and the on-chain call below,
+    # so the two can never disagree with each other.
+    min_age_seconds = getattr(body, "min_age_seconds", DEFAULT_MIN_AGE_SECONDS)
+    doc_max_age_seconds = getattr(body, "doc_max_age_seconds", DEFAULT_DOC_MAX_AGE_SECONDS)
+
+    allowed_document_types = getattr(body, "allowed_document_types", DEFAULT_ALLOWED_DOCUMENT_TYPES)
+    invalid_types = [t for t in allowed_document_types if t not in ALL_DOCUMENT_TYPES]
+    if invalid_types:
+        raise HTTPException(status_code=400, detail=f"Unknown document type(s): {invalid_types}")
+
+    nfc_policy = getattr(body, "nfc_policy", DEFAULT_NFC_POLICY)
+    if nfc_policy not in ALL_NFC_POLICIES:
+        raise HTTPException(status_code=400, detail=f"Unknown nfc_policy: {nfc_policy}")
+
     row = await db.fetchrow(
         """
         INSERT INTO integrators (
             integrator_id_hex, name, owner_stellar_address,
-            api_key_hash, webhook_url, webhook_secret, daily_sponsored_tx_limit
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+            api_key_hash, webhook_url, webhook_secret, daily_sponsored_tx_limit,
+            allowed_document_types, nfc_policy, min_age_seconds, doc_max_age_seconds
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING *
         """,
         body.integrator_id_hex,
@@ -109,6 +157,10 @@ async def create_integrator(
         body.webhook_url,
         webhook_secret,
         settings.DEFAULT_DAILY_SPONSORED_TX_LIMIT,
+        json.dumps(allowed_document_types),
+        nfc_policy,
+        min_age_seconds,
+        doc_max_age_seconds,
     )
 
     logger.info(f"Created relayer account for integrator {body.integrator_id_hex}")
@@ -118,8 +170,8 @@ async def create_integrator(
         try:
             await _register_integrator_on_chain(
                 integrator_id_hex=body.integrator_id_hex,
-                min_age_seconds=getattr(body, 'min_age_seconds', 568025136),
-                doc_max_age_seconds=getattr(body, 'doc_max_age_seconds', 315360000),
+                min_age_seconds=min_age_seconds,
+                doc_max_age_seconds=doc_max_age_seconds,
             )
             logger.info(f"On-chain registration succeeded for {body.integrator_id_hex}")
         except Exception as e:
@@ -194,6 +246,47 @@ async def _register_integrator_on_chain(
     raise Exception("On-chain registration timed out")
 
 
+@router.get("/public/{integrator_id}")
+async def get_public_integrator_info(
+    integrator_id: str,
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """
+    Unauthenticated — called by the verify page before the end user has
+    any credential at all (see app/api/kakusho/verify/integrator-info/route.ts
+    on the frontend, which proxies this and reshapes the response).
+
+    This endpoint didn't previously exist even though the frontend
+    route already called it; it's what tells the verify page which
+    document types to offer and whether NFC is mandatory for the type
+    the user picks (see app/services/nfc_policy.py).
+
+    Only exposes what a verifying end user needs. Never include
+    api_key_hash, webhook_secret, or owner_stellar_address here.
+    """
+    row = await db.fetchrow(
+        """
+        SELECT name, integrator_id_hex, min_age_seconds, doc_max_age_seconds,
+               allowed_document_types, nfc_policy
+        FROM integrators
+        WHERE id = $1 AND is_active = TRUE
+        """,
+        integrator_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Integrator not found")
+
+    integrator = dict(row)
+    return {
+        "name": integrator["name"],
+        "integrator_id_hex": integrator["integrator_id_hex"],
+        "min_age_seconds": integrator["min_age_seconds"] or DEFAULT_MIN_AGE_SECONDS,
+        "doc_max_age_seconds": integrator["doc_max_age_seconds"] or DEFAULT_DOC_MAX_AGE_SECONDS,
+        "allowed_document_types": parse_allowed_document_types(integrator),
+        "nfc_policy": get_nfc_policy(integrator),
+    }
+
+
 @router.get("/me", response_model=IntegratorResponse)
 async def get_my_integrator(
     integrator: dict = Depends(get_current_integrator),
@@ -209,6 +302,67 @@ async def get_my_integrator(
         created_at=integrator["created_at"],
     )
 
+
+@router.get("/me/policy")
+async def get_my_policy(
+    integrator: dict = Depends(get_current_integrator),
+):
+    """Dashboard settings read for the document-type / NFC policy."""
+    return {
+        "allowed_document_types": parse_allowed_document_types(integrator),
+        "nfc_policy": get_nfc_policy(integrator),
+    }
+
+
+@router.patch("/me/policy")
+async def update_my_policy(
+    body: UpdatePolicyRequest,
+    integrator: dict = Depends(get_current_integrator),
+    db: asyncpg.Connection = Depends(get_db),
+):
+    """
+    Lets an integrator change which document types they accept and
+    whether NFC is mandatory for them, after creation — this is the
+    "set type of ID required / set NFC as mandatory" control surface.
+    Takes effect immediately on the next /proof/submit or
+    /nfc/verify-chip call; does not require re-registering on-chain,
+    since this is relayer-side policy, not a contract rule.
+    """
+    if body.allowed_document_types is not None:
+        invalid = [t for t in body.allowed_document_types if t not in ALL_DOCUMENT_TYPES]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Unknown document type(s): {invalid}")
+        if len(body.allowed_document_types) == 0:
+            raise HTTPException(status_code=400, detail="allowed_document_types cannot be empty")
+
+    if body.nfc_policy is not None and body.nfc_policy not in ALL_NFC_POLICIES:
+        raise HTTPException(status_code=400, detail=f"Unknown nfc_policy: {body.nfc_policy}")
+
+    await db.execute(
+        """
+        UPDATE integrators
+        SET allowed_document_types = COALESCE($1::jsonb, allowed_document_types),
+            nfc_policy = COALESCE($2, nfc_policy),
+            updated_at = NOW()
+        WHERE id = $3
+        """,
+        json.dumps(body.allowed_document_types) if body.allowed_document_types is not None else None,
+        body.nfc_policy,
+        integrator["id"],
+    )
+
+    row = await db.fetchrow(
+        "SELECT allowed_document_types, nfc_policy FROM integrators WHERE id = $1",
+        integrator["id"],
+    )
+    integrator_updated = dict(row)
+    return {
+        "message": "Policy updated",
+        "allowed_document_types": parse_allowed_document_types(integrator_updated),
+        "nfc_policy": get_nfc_policy(integrator_updated),
+    }
+
+
 @router.get("/me/stats")
 async def get_my_stats(
     integrator: dict = Depends(get_current_integrator),
@@ -216,7 +370,7 @@ async def get_my_stats(
 ):
     """Daily usage stats for the dashboard overview."""
     window_start = datetime.now(timezone.utc) - timedelta(hours=24)
- 
+
     used_today = await db.fetchval(
         """
         SELECT COUNT(*) FROM sponsored_tx_log
@@ -225,19 +379,19 @@ async def get_my_stats(
         integrator["id"],
         window_start,
     )
- 
+
     total = await db.fetchval(
         "SELECT COUNT(*) FROM sponsored_tx_log WHERE integrator_id = $1",
         integrator["id"],
     )
- 
+
     return {
         "used_today": used_today or 0,
         "limit": integrator["daily_sponsored_tx_limit"],
         "total_submissions": total or 0,
     }
- 
- 
+
+
 @router.get("/by-owner/{stellar_address}")
 async def get_by_owner(
     stellar_address: str,
@@ -269,8 +423,8 @@ async def get_by_owner(
         }
         for r in rows
     ]
-    
- 
+
+
 @router.get("/me/webhook-secret")
 async def get_webhook_secret(
     integrator: dict = Depends(get_current_integrator),
@@ -281,6 +435,7 @@ async def get_webhook_secret(
     never expose this to the browser directly.
     """
     return {"webhook_secret": integrator.get("webhook_secret", "")}
+
 
 @router.post("/me/rotate-key")
 async def rotate_api_key(

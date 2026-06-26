@@ -31,6 +31,8 @@ export interface GenerateProofOptions {
    */
   proverAssets: ProverAssetUrls;
   onProgress?: (stage: "ocr" | "liveness" | ProvingStage) => void;
+  /** Passed through to generateProof() — see prover/index.ts's ProveOptions.workerUrl for when you need this. */
+  workerUrl?: string | URL;
 }
 
 export class KycRejectedError extends Error {
@@ -103,6 +105,7 @@ export async function generateKycProof(options: GenerateProofOptions): Promise<K
   // ── Step 4: Generate proof ───────────────────────────────────────────────
   return generateProof(witness, options.proverAssets, {
     onProgress: (stage) => options.onProgress?.(stage),
+    ...(options.workerUrl !== undefined ? { workerUrl: options.workerUrl } : {}),
   });
 }
 

@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
   const expires = Date.now() + 5 * 60 * 1000; // 5 minutes
 
   const message =
-    `TrustID Dashboard Authentication\n\n` +
+    `Kakusho Dashboard Authentication\n\n` +
     `Address: ${address}\n` +
     `Nonce: ${nonce}\n` +
     `Issued: ${new Date().toISOString()}\n` +

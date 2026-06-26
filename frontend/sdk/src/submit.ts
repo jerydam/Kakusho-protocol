@@ -1,6 +1,6 @@
 /**
  * submit.ts — convenience helper that converts a KycProofResult into the
- * exact JSON shape the TrustID relayer backend expects and POSTs it.
+ * exact JSON shape the Kakusho relayer backend expects and POSTs it.
  * Optional — integrators can format the payload themselves if they prefer.
  */
 
@@ -32,7 +32,7 @@ function bigintToHex32(n: bigint): string {
 }
 
 /**
- * Submits a KycProofResult to the TrustID relayer backend.
+ * Submits a KycProofResult to the Kakusho relayer backend.
  *
  * @param proof - The proof returned by generateKycProof()
  * @param relayerUrl - Base URL of your relayer, e.g. "https://relayer.your-org.com"
@@ -58,7 +58,7 @@ export async function submitProof(
       bigintToHex32(proof.publicSignals.docMaxAgeSeconds),
       proof.publicSignals.integratorId,
     ],
-    user_stellar_address: userStellarAddress,
+    ...(userStellarAddress !== undefined ? { user_stellar_address: userStellarAddress } : {}),
   };
 
   const res = await fetch(`${relayerUrl}/proof/submit`, {

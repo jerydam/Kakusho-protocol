@@ -18,14 +18,14 @@ function parseDateToUnix(dateStr: string | null): number {
 
   let m = trimmed.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
   if (m) {
-    let [, d, mo, y] = m;
+    let [, d, mo, y] = m as [string, string, string, string];
     if (y.length === 2) y = (parseInt(y, 10) > 30 ? "19" : "20") + y;
     return Math.floor(new Date(`${y}-${mo.padStart(2, "0")}-${d.padStart(2, "0")}T00:00:00Z`).getTime() / 1000);
   }
 
   m = trimmed.match(/^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{2,4})$/);
   if (m) {
-    const [, d, monthName, y] = m;
+    const [, d, monthName, y] = m as [string, string, string, string];
     const months = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"];
     const idx = months.findIndex((mn) => monthName.toLowerCase().startsWith(mn));
     if (idx >= 0) {
@@ -45,7 +45,7 @@ function nationalityToCode(nationalityText: string | null, countryCodeMap: Recor
       `Unrecognized nationality: ${JSON.stringify(nationalityText)}. Not in country code map — check for OCR misread.`
     );
   }
-  return countryCodeMap[key];
+  return countryCodeMap[key] as number;
 }
 
 async function sha256Hex(input: string): Promise<string> {

@@ -1,0 +1,81 @@
+{
+  "name": "@kakusho/zk-kyc-sdk",
+  "version": "0.1.0",
+  "description": "Client-side ZK KYC SDK. Generates Groth16 proofs entirely in the browser. No PII leaves the device.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./nfc": {
+      "types": "./dist/nfc.d.ts",
+      "import": "./dist/nfc.js",
+      "require": "./dist/nfc.cjs"
+    },
+    "./session": {
+      "types": "./dist/session.d.ts",
+      "import": "./dist/session.js",
+      "require": "./dist/session.cjs"
+    },
+    "./session/react": {
+      "types": "./dist/session-react.d.ts",
+      "import": "./dist/session-react.js",
+      "require": "./dist/session-react.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "build:watch": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "prepublishOnly": "npm run build && npm run typecheck"
+  },
+  "peerDependencies": {
+    "@mediapipe/tasks-vision": "^0.10.14",
+    "react": ">=18.0.0",
+    "snarkjs": "^0.7.0",
+    "tesseract.js": "^5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@mediapipe/tasks-vision": "^0.10.35",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.31",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.0.0",
+    "react": "^18.3.1",
+    "snarkjs": "^0.7.6",
+    "tesseract.js": "^5.1.1",
+    "tsup": "^8.0.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "zk",
+    "kyc",
+    "groth16",
+    "snarkjs",
+    "stellar",
+    "soroban",
+    "privacy",
+    "zkp"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jerydam/kakusho-zk-kyc-sdk"
+  }
+}

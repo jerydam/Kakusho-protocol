@@ -18,7 +18,7 @@ Kakushō solves both problems at once.
 
 ## The Solution
 
-A **universal ZK circuit** that any dApp can plug into. Users scan their ID document locally in the browser, generate a Groth16 zero-knowledge proof that they meet the dApp's compliance rules, and submit only the proof — never the document.
+A **universal ZK circuit** that any dApp can plug into. Users scan their ID document locally in the browser — by camera or by tapping an NFC chip — generate a Groth16 zero-knowledge proof that they meet the dApp's compliance rules, and submit only the proof — never the document.
 
 The dApp receives a mathematically guaranteed boolean result and a Sybil-resistant nullifier. Nothing else. We call this **Zero Liability**.
 
@@ -31,16 +31,20 @@ The dApp receives a mathematically guaranteed boolean result and a Sybil-resista
 │                    BROWSER (USER DEVICE)                     │
 │                                                             │
 │  ID Card ──► Tesseract.js OCR Worker ──► Private Attributes │
+│  NFC Tap ──► ISO 7816-4 APDU Reader  ──► DG1 + SOD Bytes    │
 │  Selfies ──► MediaPipe Liveness      ──► Biometric Pass     │
 │                                                             │
 │  Private Attributes + Integrator Rules ──► Witness Builder  │
 │  Full Witness ──► SnarkJS WASM Prover ──► Groth16 ZK Proof  │
 └──────────────────────────┬──────────────────────────────────┘
                            │  Proof + Public Signals only
+                           │  (NFC: DG1/SOD bytes go to the relayer
+                           │   for Passive Auth before proving)
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                   FASTAPI RELAYER ENGINE                     │
 │                                                             │
+│  NFC: Passive Authentication (DG1 ↔ SOD ↔ DS ↔ CSCA chain)  │
 │  snarkjs off-chain pre-check ──► Spend limit enforcement    │
 │  Sponsor wallet signs & pays XLM fees on behalf of user     │
 └──────────────────────────┬──────────────────────────────────┘
@@ -114,10 +118,31 @@ npm install @Kakushō/zk-kyc-sdk snarkjs tesseract.js @mediapipe/tasks-vision
 
 The user experience is four steps inside your frontend:
 
-1. Upload an ID document photo (passport, national ID, or driver's licence).
-2. Take four selfies looking left, right, up, and down.
+1. Upload an ID document photo (passport, national ID, or driver's licence) — or, on Android Chrome, tap an NFC-chip passport/ID against the back of the phone instead.
+2. Take four selfies looking left, right, up, and down (OCR path only — skipped on the NFC path, see below).
 3. Wait for the proof to generate locally (10–60 seconds depending on device).
 4. Done. No document is uploaded anywhere.
+
+---
+
+## Verification Paths
+
+Kakushō ships with two ways to generate a proof. Integrators can offer both and let the SDK pick the best one for the user's device, or restrict to one path.
+
+### OCR Path (default, any device with a camera)
+
+The user photographs their ID. Tesseract.js extracts fields entirely client-side, the SDK builds a witness, and a Groth16 proof is generated against `kyc_ocr.circom`. This path works on virtually any device, but it proves *internal consistency of the witness*, not the physical authenticity of the document — see **Security Model** below.
+
+### NFC Path (Android Chrome, ICAO chip documents)
+
+The user taps an ePassport or chip-based national ID to their phone instead of photographing it. The SDK reads the `DG1` and `SOD` data groups off the chip over ISO 7816-4 APDUs via Web NFC, then sends the raw bytes to the relayer for **Passive Authentication**: a SHA-256 hash chain check from `DG1` up through the document's Document Signer certificate and on to the issuing country's CSCA entry in ICAO's published master list. Only once that chain validates does the browser build a witness and generate a proof against `nfc_chip_verify.circom`.
+
+Because the DS → CSCA chain is checked against ICAO's master list, a forged or cloned chip cannot pass this path — it's the strongest authenticity guarantee Kakushō offers today, and it skips the liveness-selfie step entirely since chip authenticity already does that job.
+
+**Current constraints (motivating the mobile app on the roadmap below):**
+- Requires Chrome on Android 89+ with the Web NFC / ISO-DEP origin trial enabled.
+- Not available on iOS, and not available on desktop without a USB PC/SC reader relay.
+- Only chip documents *without* BAC (Basic Access Control) can be read through Web NFC today. Most passports use BAC, which needs an MRZ-derived key exchange before the chip will respond — Web NFC doesn't expose the low-level APDU control needed for that exchange.
 
 ---
 
@@ -134,6 +159,8 @@ The circuit validates five predicates in a single proof:
 | Nationality is allowed | Merkle bracket non-membership proof | `nationality_code`, `bracket_low`, `bracket_high`, `path_elements`, `path_indices` |
 | Proof belongs to this integrator | Public input binding | `integrator_id` (public) |
 | Sybil resistance | Poseidon hash of doc_id + user_secret + integrator_id | `doc_id`, `user_secret` |
+
+The NFC path uses a sibling circuit, `nfc_chip_verify.circom`, which proves the same age/freshness/nationality/nullifier predicates but binds them to the hash pair returned by the relayer's Passive Authentication step instead of OCR-extracted fields. It has its own compiled WASM/zkey and verification key — see **SDK Integration** below.
 
 ### The Public Signal Vector
 
@@ -187,9 +214,13 @@ NEXT_PUBLIC_Kakushō_RELAYER_URL=https://your-relayer.com
 NEXT_PUBLIC_Kakushō_API_KEY=zkkyc_...
 NEXT_PUBLIC_WASM_URL=https://cdn.your-org.com/kyc_ocr.wasm
 NEXT_PUBLIC_ZKEY_URL=https://cdn.your-org.com/kyc_ocr_final.zkey
+
+# NFC path — separate circuit, separate assets
+NEXT_PUBLIC_NFC_WASM_URL=https://cdn.your-org.com/nfc_chip_verify.wasm
+NEXT_PUBLIC_NFC_ZKEY_URL=https://cdn.your-org.com/nfc_chip_verify_final.zkey
 ```
 
-### Generate and submit a proof
+### Generate and submit a proof (OCR path)
 
 ```typescript
 import { generateKycProof, submitProof, KycRejectedError } from '@Kakushō/zk-kyc-sdk';
@@ -237,12 +268,58 @@ try {
 }
 ```
 
+### Generate and submit a proof (NFC path)
+
+```typescript
+import {
+  generateKycProofFromNFC,
+  supportsNFC,
+  submitProof,
+  KycRejectedError,
+} from '@Kakushō/zk-kyc-sdk/nfc';
+
+if (!supportsNFC()) {
+  // Fall back to the OCR flow above — covers iOS, desktop, and
+  // BAC-protected passports until the native app (see Roadmap) ships
+}
+
+try {
+  const proof = await generateKycProofFromNFC({
+    integratorAssets,                 // same shape as the OCR example above
+    proverAssets: {
+      wasmUrl: process.env.NEXT_PUBLIC_NFC_WASM_URL!,
+      zkeyUrl: process.env.NEXT_PUBLIC_NFC_ZKEY_URL!,
+    },
+    onProgress: (stage) => console.log('Stage:', stage),
+    // stages: tap_chip | reading_chip | passive_auth | fetching_wasm |
+    //         fetching_zkey | computing_witness | generating_proof | done
+  });
+
+  const result = await submitProof(
+    proof,
+    process.env.NEXT_PUBLIC_Kakushō_RELAYER_URL!,
+    process.env.NEXT_PUBLIC_Kakushō_API_KEY!,
+    userStellarAddress, // optional
+  );
+
+  console.log('Verified on-chain:', result.tx_hash);
+
+} catch (e) {
+  if (e instanceof KycRejectedError) {
+    // e.reason: 'nfc_read_failed' | 'passive_auth_failed' | 'predicate_failed'
+    console.error(e.reason, e.message);
+  }
+}
+```
+
 ### Error types
 
 | Error | `reason` | Meaning |
 |-------|----------|---------|
 | `KycRejectedError` | `ocr_failed` | Document unreadable — ask user to retake |
 | `KycRejectedError` | `liveness_failed` | Missing head poses — `e.message` lists which ones |
+| `KycRejectedError` | `nfc_read_failed` | Chip didn't respond — ask user to re-tap, hold steady |
+| `KycRejectedError` | `passive_auth_failed` | Chip's signature chain didn't validate against the CSCA master list |
 | `KycRejectedError` | `predicate_failed` | User doesn't meet age or country rules |
 | `OCRError` | — | Tesseract failed entirely — image too dark/blurry |
 | `WitnessBuildError` | — | Date parse failed or nationality not in country map |
@@ -255,7 +332,9 @@ All routes require `X-API-Key: zkkyc_...` header (from the dashboard).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/proof/submit` | Submit a proof for sponsorship and on-chain verification |
+| `POST` | `/proof/submit` | Submit an OCR-path proof for sponsorship and on-chain verification |
+| `POST` | `/nfc/verify-chip` | Passive Authentication for DG1/SOD bytes read from an NFC chip |
+| `POST` | `/nfc/submit-proof` | Submit an NFC-path proof for sponsorship and on-chain verification |
 | `GET` | `/proof/status/{tx_hash}` | Poll verification result |
 | `POST` | `/integrators` | Register a new integrator account |
 | `GET` | `/integrators/me` | Get current integrator + config |
@@ -287,12 +366,15 @@ Delivered to your registered URL with `X-Webhook-Signature: <HMAC-SHA256>` for v
   "event":             "kyc.verification.completed",
   "integrator_id_hex": "0101...01",
   "nullifier_hex":     "abcd...ef",
+  "proof_type":        "ocr",
   "status":            "confirmed",
   "tx_hash":           "a8ae...ba",
   "submission_id":     "uuid",
   "timestamp":         "2025-01-01T00:00:00Z"
 }
 ```
+
+`proof_type` is either `"ocr"` or `"nfc"`, so you can track which path your users are completing.
 
 Verify the signature in your webhook handler:
 
@@ -396,20 +478,24 @@ npm run dev
 - The on-chain binding check ensures a proof generated for one integrator's rules cannot be replayed under a different integrator's config. Every field in `publicSignals` is verified against the ledger's stored values before the pairing check runs.
 - The nullifier (`Poseidon(doc_id, user_secret, integrator_id)`) is unique per document per integrator. The same physical document cannot pass verification twice at the same dApp. Cross-app tracking is prevented because the nullifier is domain-separated by `integrator_id`.
 - The sponsor wallet never has custody of user funds and cannot sign anything except the specific verify() call it prepares.
+- **NFC path only:** the DS → CSCA Passive Authentication chain confirms the chip's data was actually signed by a recognized issuing-country authority. This closes the forgery gap that exists on the OCR path.
 
-**What Kakushō does not guarantee (OCR-tier limitations):**
+**What Kakushō does not guarantee (OCR-path limitations):**
 
-Kakushō is currently an **OCR-tier** protocol. The ZK cryptography is unforgeable, but the data fed into it comes from client-side text extraction. A sophisticated adversary with control over the browser runtime or with a carefully crafted document graphic could potentially feed false field values into the circuit without the circuit detecting the forgery. Kakushō confirms the *internal consistency* of a proof, not the physical authenticity of the source document.
+The OCR path is currently **text-extraction-tier**. The ZK cryptography is unforgeable, but the data fed into it comes from client-side text extraction. A sophisticated adversary with control over the browser runtime or with a carefully crafted document graphic could potentially feed false field values into the circuit without the circuit detecting the forgery. The OCR path confirms the *internal consistency* of a proof, not the physical authenticity of the source document — for that, use the NFC path above.
 
 ---
 
 ## Roadmap
 
-**Phase 2 — NFC chip reading**
-Extend the browser SDK to read the cryptographically signed chip embedded in ICAO-compliant biometric passports via WebNFC. This replaces OCR with chip data that cannot be spoofed optically.
+**Shipped — NFC chip reading**
+Browser-based NFC support for ICAO-compliant chip documents is live (see **Verification Paths** above). It reads the cryptographically signed chip directly via ISO 7816-4 and Passive Authentication instead of relying on OCR, closing the forgery gap that text extraction can't.
+
+**Phase 2 — Native mobile app**
+Web NFC's reach is limited to Android Chrome, and it can't perform the BAC key exchange that most passports require — so the bulk of real-world ePassports still fall back to OCR today. A native iOS/Android app removes both limits: Core NFC on iOS, full APDU control on Android for the MRZ-derived BAC key exchange, and a smoother tap-to-verify flow without a browser origin-trial flag. This is the most direct way to get the NFC path's stronger guarantees in front of the majority of users.
 
 **Phase 3 — Government signature verification in ZK**
-Extend the circuit to verify the RSA/ECDSA signature issued by the document's country authority inside the ZK proof. The circuit proves the document was signed by a recognized government key without revealing which government or document was used. This upgrades Kakushō to sovereign-grade tamper-proof verification.
+Extend the circuit to verify the RSA/ECDSA signature issued by the document's country authority inside the ZK proof itself. The circuit proves the document was signed by a recognized government key without revealing which government or document was used. This upgrades Kakushō to sovereign-grade tamper-proof verification, independent of whether the data arrived via OCR or NFC.
 
 **Phase 4 — Global document polymorphism**
 Extend the witness layout to cover driver's licences, residence permits, and other ICAO-adjacent credential formats under the same universal circuit.
@@ -424,7 +510,7 @@ MIT — see `LICENSE`.
 
 ## Acknowledgements
 
-Built on [Stellar](https://stellar.org) and [Soroban](https://soroban.stellar.org).  
-ZK proving via [snarkjs](https://github.com/iden3/snarkjs) and [circom](https://github.com/iden3/circom).  
-Document OCR via [Tesseract.js](https://tesseract.projectnaptha.com).  
-Liveness detection via [MediaPipe](https://mediapipe.dev).
+Built on [Stellar](https://stellar.org) and [Soroban](https://soroban.stellar.org).
+ZK proving via [snarkjs](https://github.com/iden3/snarkjs) and [circom](https://github.com/iden3/circom).
+Document OCR via [Tesseract.js](https://tesseract.projectnaptha.com).
+Liveness detection via [MediaPipe](https://mediapipe.dev).s

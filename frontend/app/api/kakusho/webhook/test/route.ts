@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 
-const RELAYER = process.env.TRUSTID_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
 
 export async function POST(req: NextRequest) {
   const apiKey = req.headers.get('x-api-key') || '';

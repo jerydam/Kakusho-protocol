@@ -7,7 +7,7 @@ import { join } from 'path';
 const TREE_PATH = join(process.cwd(), 'public/restricted_tree.json');
 
 const SCRIPT_PATH =
-  process.env.TRUSTID_CIRCUITS_PATH ||
+  process.env.Kakusho_CIRCUITS_PATH ||
   join(process.cwd(), '../circuits/scripts/build_restricted_tree.js');
 
 // GET — serves the pre-built static tree (used by frontend)
@@ -46,8 +46,8 @@ export async function POST(req: NextRequest) {
   }
 
   const ts = Date.now();
-  const inputPath  = join(tmpdir(), `trustid_codes_${ts}.json`);
-  const outputPath = join(tmpdir(), `trustid_tree_${ts}.json`);
+  const inputPath  = join(tmpdir(), `Kakusho_codes_${ts}.json`);
+  const outputPath = join(tmpdir(), `Kakusho_tree_${ts}.json`);
 
   try {
     await writeFile(inputPath, JSON.stringify(codes));

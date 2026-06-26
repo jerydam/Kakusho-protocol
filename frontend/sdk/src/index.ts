@@ -1,12 +1,12 @@
 /**
- * @trustid/zk-kyc-sdk
+ * @Kakusho/zk-kyc-sdk
  *
  * Client-side ZK KYC SDK. Generates Groth16 proofs entirely in the browser.
  * No PII, no document images, no selfies ever leave the user's device.
  * Only the final cryptographic proof is submitted to the relayer.
  *
  * Usage:
- *   import { generateKycProof, submitProof, KycRejectedError } from '@trustid/zk-kyc-sdk';
+ *   import { generateKycProof, submitProof, KycRejectedError } from '@Kakusho/zk-kyc-sdk';
  */
 
 // ── Core ──────────────────────────────────────────────────────────────────────

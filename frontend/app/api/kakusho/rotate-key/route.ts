@@ -1,8 +1,8 @@
 // ── rotate-key/route.ts ──────────────────────────────────────────────────────
-// app/api/trustid/rotate-key/route.ts
+// app/api/Kakusho/rotate-key/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
-const RELAYER = process.env.TRUSTID_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
 
 export async function POST(req: NextRequest) {
   const apiKey = req.headers.get('x-api-key') || '';

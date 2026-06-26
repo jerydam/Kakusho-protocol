@@ -5,6 +5,19 @@ import { useRouter } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { isConnected, requestAccess, signMessage } from '@stellar/freighter-api';
 
+const DOCUMENT_TYPES = [
+  { value: 'passport', label: 'PASSPORT' },
+  { value: 'national_id', label: 'NATIONAL ID' },
+  { value: 'drivers_license', label: "DRIVER'S LICENSE" },
+] as const;
+
+const NFC_POLICIES = [
+  { value: 'optional', label: 'OPTIONAL', hint: 'NFC never required' },
+  { value: 'required_for_passport', label: 'REQUIRED FOR PASSPORT', hint: 'Default — ICAO chip docs only' },
+  { value: 'always_required', label: 'ALWAYS REQUIRED', hint: 'Every accepted doc type needs NFC' },
+  { value: 'never', label: 'NEVER', hint: 'Disable NFC path entirely' },
+] as const;
+
 export default function RegisterPage() {
   const router = useRouter();
   const [step, setStep] = useState<'form' | 'connecting' | 'signing' | 'registering' | 'done'>('form');
@@ -18,7 +31,21 @@ export default function RegisterPage() {
     min_age_years: '18',
     doc_max_age_years: '10',
     integrator_id_hex: '',
+    allowed_document_types: ['passport'] as string[],
+    nfc_policy: 'required_for_passport' as string,
   });
+
+  function toggleDocType(value: string) {
+    setForm((prev) => {
+      const has = prev.allowed_document_types.includes(value);
+      const next = has
+        ? prev.allowed_document_types.filter((t) => t !== value)
+        : [...prev.allowed_document_types, value];
+      // Keep at least one type selected so the integrator can't end up
+      // accepting nothing.
+      return { ...prev, allowed_document_types: next.length ? next : prev.allowed_document_types };
+    });
+  }
 
   function generateIntegratorId() {
     const bytes = new Uint8Array(32);
@@ -31,7 +58,6 @@ export default function RegisterPage() {
     if (!form.name.trim()) { setError('NAME_REQUIRED'); return; }
 
     try {
-      // Check extension is present
       const connected = await isConnected();
       if (connected.error) {
         setError('NO_WALLET — Install Freighter wallet (freighter.app)');
@@ -73,6 +99,8 @@ export default function RegisterPage() {
           integrator_id_hex: integratorId,
           min_age_seconds: parseInt(form.min_age_years) * 365 * 24 * 3600,
           doc_max_age_seconds: parseInt(form.doc_max_age_years) * 365 * 24 * 3600,
+          allowed_document_types: form.allowed_document_types,
+          nfc_policy: form.nfc_policy,
           stellar_address: publicKey,
           signed_message: signedMessage,
           message,
@@ -159,7 +187,6 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-kz-void flex items-center justify-center px-4 py-12">
       <div className="w-full max-w-sm">
-        {/* Header */}
         <div className="text-center mb-8">
           <div className="kz-icon-frame mx-auto mb-5">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
@@ -174,7 +201,6 @@ export default function RegisterPage() {
         </div>
 
         <div className="kz-panel animate-kz-rise space-y-5">
-          {/* Name */}
           <div>
             <label className="kz-mono text-[9px] tracking-widest text-kz-slate block mb-2">
               APP_NAME *
@@ -188,7 +214,6 @@ export default function RegisterPage() {
             />
           </div>
 
-          {/* Min age */}
           <div>
             <label className="kz-mono text-[9px] tracking-widest text-kz-slate block mb-2">
               MIN_AGE_YEARS
@@ -198,10 +223,7 @@ export default function RegisterPage() {
                 <button
                   key={age}
                   onClick={() => setForm({ ...form, min_age_years: age })}
-                  className={cn(
-                    'kz-doc-type-btn py-2',
-                    form.min_age_years === age && 'kz-doc-type-active'
-                  )}
+                  className={cn('kz-doc-type-btn py-2', form.min_age_years === age && 'kz-doc-type-active')}
                 >
                   <span className="kz-mono text-[11px] font-bold tracking-widest">{age}+</span>
                 </button>
@@ -209,7 +231,6 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* Doc max age */}
           <div>
             <label className="kz-mono text-[9px] tracking-widest text-kz-slate block mb-2">
               DOC_MAX_AGE_YEARS
@@ -219,10 +240,7 @@ export default function RegisterPage() {
                 <button
                   key={age}
                   onClick={() => setForm({ ...form, doc_max_age_years: age })}
-                  className={cn(
-                    'kz-doc-type-btn py-2',
-                    form.doc_max_age_years === age && 'kz-doc-type-active'
-                  )}
+                  className={cn('kz-doc-type-btn py-2', form.doc_max_age_years === age && 'kz-doc-type-active')}
                 >
                   <span className="kz-mono text-[11px] font-bold tracking-widest">{age}y</span>
                 </button>
@@ -230,7 +248,56 @@ export default function RegisterPage() {
             </div>
           </div>
 
-          {/* Webhook */}
+          {/* Accepted document types */}
+          <div>
+            <label className="kz-mono text-[9px] tracking-widest text-kz-slate block mb-2">
+              ACCEPTED_ID_TYPES <span className="text-white/20">(TAP TO TOGGLE)</span>
+            </label>
+            <div className="grid grid-cols-1 gap-2">
+              {DOCUMENT_TYPES.map((d) => {
+                const active = form.allowed_document_types.includes(d.value);
+                return (
+                  <button
+                    key={d.value}
+                    onClick={() => toggleDocType(d.value)}
+                    className={cn('kz-doc-type-btn py-2 text-left px-3', active && 'kz-doc-type-active')}
+                  >
+                    <span className="kz-mono text-[11px] font-bold tracking-widest">
+                      {active ? '☑' : '☐'} {d.label}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* NFC policy */}
+          <div>
+            <label className="kz-mono text-[9px] tracking-widest text-kz-slate block mb-2">
+              NFC_POLICY
+            </label>
+            <div className="grid grid-cols-1 gap-2">
+              {NFC_POLICIES.map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setForm({ ...form, nfc_policy: p.value })}
+                  className={cn(
+                    'kz-doc-type-btn py-2 text-left px-3',
+                    form.nfc_policy === p.value && 'kz-doc-type-active'
+                  )}
+                >
+                  <span className="kz-mono text-[11px] font-bold tracking-widest block">{p.label}</span>
+                  <span className="kz-mono text-[9px] text-white/30 block mt-0.5">{p.hint}</span>
+                </button>
+              ))}
+            </div>
+            <p className="kz-mono text-[9px] text-kz-cyan/25 tracking-widest mt-2">
+              "REQUIRED FOR PASSPORT" MEANS: PASSPORT SUBMISSIONS MUST USE THE
+              NFC CHIP-READ FLOW. OTHER ACCEPTED TYPES STAY OCR-ONLY UNLESS
+              YOU CHOOSE "ALWAYS REQUIRED".
+            </p>
+          </div>
+
           <div>
             <label className="kz-mono text-[9px] tracking-widest text-kz-slate block mb-2">
               WEBHOOK_URL <span className="text-white/20">(OPTIONAL)</span>

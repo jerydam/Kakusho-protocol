@@ -14,6 +14,29 @@ export type ProvingStage =
 
 export interface ProveOptions {
   onProgress?: (stage: ProvingStage) => void;
+  /**
+   * URL to the compiled snarkjs_worker script. Required override in most
+   * real deployments — see note below.
+   *
+   * WHY THIS EXISTS: generateProof() is called from multiple package entry
+   * points (the root "." export, "./session", etc.) which live at different
+   * folder depths once bundled. A worker URL built from
+   * `new URL("./snarkjs_worker.js", import.meta.url)` resolves relative to
+   * WHICHEVER entry file happens to import this code, so the same relative
+   * path is correct for one entry point and wrong for the others.
+   *
+   * Default: assumes the consuming app serves this package's dist/ folder
+   * such that "prover/snarkjs_worker.js" is reachable next to wherever your
+   * bundler emits this package's output (typical for Next.js/Vite when
+   * importing from node_modules directly). If your bundler copies/renames
+   * worker assets (common with webpack 5 Asset Modules, or if you re-export
+   * this SDK through your own bundle), pass workerUrl explicitly:
+   *
+   *   generateProof(witness, assets, {
+   *     workerUrl: new URL('@kakusho/zk-kyc-sdk/dist/prover/snarkjs_worker.js', import.meta.url)
+   *   })
+   */
+  workerUrl?: string | URL;
 }
 
 function decimalToBytes32(decimal: string): Uint8Array {
@@ -27,7 +50,7 @@ function decimalToBytes32(decimal: string): Uint8Array {
 }
 
 // G1: x (32 bytes BE) || y (32 bytes BE) = 64 bytes
-function g1ToUncompressedBytes(point: string[]): Uint8Array {
+function g1ToUncompressedBytes(point: readonly [string, string, ...string[]]): Uint8Array {
   const x = decimalToBytes32(point[0]);
   const y = decimalToBytes32(point[1]);
   const out = new Uint8Array(64);
@@ -38,7 +61,7 @@ function g1ToUncompressedBytes(point: string[]): Uint8Array {
 
 // G2: x_c1 || x_c0 || y_c1 || y_c0 = 128 bytes
 // Component order matches Bn254G2Affine::from_array in the Soroban contract.
-function g2ToUncompressedBytes(point: string[][]): Uint8Array {
+function g2ToUncompressedBytes(point: readonly [readonly [string, string, ...string[]], readonly [string, string, ...string[]], ...unknown[]]): Uint8Array {
   const xC0 = decimalToBytes32(point[0][0]);
   const xC1 = decimalToBytes32(point[0][1]);
   const yC0 = decimalToBytes32(point[1][0]);
@@ -61,7 +84,8 @@ export function generateProof(
   options: ProveOptions = {}
 ): Promise<KycProofResult> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./snarkjs_worker.ts", import.meta.url), { type: "module" });
+    const workerUrl = options.workerUrl ?? new URL("./kakusho-prover-worker.js", import.meta.url);
+    const worker = new Worker(workerUrl, { type: "module" });
 
     worker.onmessage = (event: MessageEvent) => {
       const msg = event.data;
@@ -69,15 +93,15 @@ export function generateProof(
         options.onProgress?.(msg.stage);
       } else if (msg.type === "success") {
         worker.terminate();
-        const proofA = g1ToUncompressedBytes(msg.proof.pi_a);
-        const proofB = g2ToUncompressedBytes(msg.proof.pi_b);
-        const proofC = g1ToUncompressedBytes(msg.proof.pi_c);
+        const proofA = g1ToUncompressedBytes(msg.proof.pi_a as [string, string, ...string[]]);
+        const proofB = g2ToUncompressedBytes(msg.proof.pi_b as [[string, string, ...string[]], [string, string, ...string[]], ...unknown[]]);
+        const proofC = g1ToUncompressedBytes(msg.proof.pi_c as [string, string, ...string[]]);
 
         // public_signals order from kyc_ocr.circom:
         // [nullifier (output), current_timestamp, min_age_seconds,
         //  restricted_root, doc_max_age_seconds, integrator_id]
         const [nullifierStr, currentTimestampStr, minAgeStr, restrictedRootStr, docMaxAgeStr, integratorIdStr] =
-          msg.publicSignals;
+          msg.publicSignals as [string, string, string, string, string, string];
 
         resolve({
           proofA,

@@ -19,8 +19,38 @@ from datetime import datetime
 from uuid import UUID
 from typing import Optional
 from enum import Enum
-
-
+from app.services.nfc_policy import DocumentType, NFCPolicy
+ 
+ 
+# ── Add these fields to IntegratorCreateRequest ──
+class IntegratorCreateRequest_ADDITIONS(BaseModel):
+    allowed_document_types: list[DocumentType] = [DocumentType.PASSPORT]
+    nfc_policy: NFCPolicy = NFCPolicy.REQUIRED_FOR_PASSPORT
+    min_age_seconds: int = 568025136          # ~18 years
+    doc_max_age_seconds: int = 315360000      # ~10 years
+ 
+ 
+# ── Add this field to SubmitProofRequest (routes_proof.py) ──
+class SubmitProofRequest_ADDITIONS(BaseModel):
+    document_type: DocumentType = DocumentType.PASSPORT
+ 
+ 
+# ── New models, not additions to existing ones — these can be imported
+#    directly from here, or moved into models.py verbatim ──
+class IntegratorPublicInfo(BaseModel):
+    name: str
+    integrator_id_hex: str
+    min_age_seconds: int
+    doc_max_age_seconds: int
+    allowed_document_types: list[str]
+    nfc_policy: str
+ 
+ 
+class IntegratorPolicyResponse(BaseModel):
+    allowed_document_types: list[str]
+    nfc_policy: str
+ 
+ 
 class WebhookStatus(str, Enum):
     PENDING = "pending"
     DELIVERED = "delivered"

@@ -50,11 +50,14 @@ async function estimateYawPitch(image: HTMLImageElement | HTMLCanvasElement): Pr
   if (!result.faceLandmarks || result.faceLandmarks.length === 0) return null;
 
   const lm = result.faceLandmarks[0];
+  if (!lm) return null;
+
   const nose = lm[NOSE_TIP];
   const chin = lm[CHIN];
   const leftEye = lm[LEFT_EYE];
   const rightEye = lm[RIGHT_EYE];
   const forehead = lm[FOREHEAD];
+  if (!nose || !chin || !leftEye || !rightEye || !forehead) return null;
 
   const eyeMidX = (leftEye.x + rightEye.x) / 2;
   const eyeSpan = Math.abs(rightEye.x - leftEye.x) || 0.01;
