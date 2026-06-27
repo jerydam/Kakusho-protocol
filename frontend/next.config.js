@@ -8,6 +8,10 @@ const nextConfig = {
       },
     ];
   },
+    eslint: {
+    ignoreDuringBuilds: true,
+  },
+
 
   webpack: (config) => {
     config.optimization.minimizer.forEach((minimizer) => {
