@@ -116,7 +116,7 @@ export default function VerifyPage() {
 
   // Proof progress
   const [proofStage, setProofStage] = useState<ProofStage | null>(null);
-  const [txHash, setTxHash] = useState('');
+  const [txHash, setTxHash] = useState<string | undefined>(undefined);
 
   // ── Load integrator info ─────────────────────────────────────────────────
 
@@ -237,10 +237,10 @@ export default function VerifyPage() {
         walletAddress,
       );
 
-      setTxHash(result.tx_hash);
+      setTxHash(result.tx_hash ?? undefined);
       setStage('done');
 
-      if (callbackUrl) redirectWithResult(walletAddress, true, result.tx_hash);
+    if (callbackUrl) redirectWithResult(walletAddress, true, result.tx_hash ?? undefined);
     } catch (e: any) {
       setError(e.reason ? `${e.reason}: ${e.message}` : e.message || 'Proof generation failed.');
       setStage('error');
