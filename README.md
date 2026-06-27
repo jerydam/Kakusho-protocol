@@ -109,7 +109,7 @@ Hit the dashboard at `/dashboard/register`, connect Freighter, and save the API 
 **5. Install the SDK in your frontend.**
 
 ```bash
-npm install @Kakushō/zk-kyc-sdk snarkjs tesseract.js @mediapipe/tasks-vision
+npm install @Kakusho/zk-kyc-sdk snarkjs tesseract.js @mediapipe/tasks-vision
 ```
 
 ---
@@ -204,7 +204,7 @@ The result: proving non-membership costs O(log N) constraints regardless of list
 ### Install
 
 ```bash
-npm install @Kakushō/zk-kyc-sdk snarkjs tesseract.js @mediapipe/tasks-vision
+npm install @Kakusho/zk-kyc-sdk snarkjs tesseract.js @mediapipe/tasks-vision
 ```
 
 ### Environment variables
@@ -223,7 +223,7 @@ NEXT_PUBLIC_NFC_ZKEY_URL=https://cdn.your-org.com/nfc_chip_verify_final.zkey
 ### Generate and submit a proof (OCR path)
 
 ```typescript
-import { generateKycProof, submitProof, KycRejectedError } from '@Kakushō/zk-kyc-sdk';
+import { generateKycProof, submitProof, KycRejectedError } from '@Kakusho/zk-kyc-sdk';
 
 // Load integrator assets (fetch once, cache in state)
 const integratorAssets = {
@@ -276,7 +276,7 @@ import {
   supportsNFC,
   submitProof,
   KycRejectedError,
-} from '@Kakushō/zk-kyc-sdk/nfc';
+} from '@Kakusho/zk-kyc-sdk/nfc';
 
 if (!supportsNFC()) {
   // Fall back to the OCR flow above — covers iOS, desktop, and

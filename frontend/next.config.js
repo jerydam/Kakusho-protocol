@@ -8,6 +8,18 @@ const nextConfig = {
       },
     ];
   },
+
+  webpack: (config) => {
+    config.optimization.minimizer.forEach((minimizer) => {
+      if (minimizer.constructor?.name === 'TerserPlugin') {
+        minimizer.options.terserOptions = {
+          ...minimizer.options.terserOptions,
+          module: true,
+        };
+      }
+    });
+    return config;
+  },
 };
 
 module.exports = nextConfig;
