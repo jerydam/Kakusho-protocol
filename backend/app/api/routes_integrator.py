@@ -166,17 +166,17 @@ async def create_integrator(
     logger.info(f"Created relayer account for integrator {body.integrator_id_hex}")
 
     # Register on-chain atomically
+    # In create_integrator — remove the keypair= kwarg
     if settings.KYC_REGISTRY_CONTRACT_ID and settings.SPONSOR_STELLAR_SECRET:
         try:
             await _register_integrator_on_chain(
                 integrator_id_hex=body.integrator_id_hex,
                 min_age_seconds=min_age_seconds,
                 doc_max_age_seconds=doc_max_age_seconds,
-                keypair = Keypair.from_secret(settings.SPONSOR_STELLAR_SECRET)
+                # no keypair kwarg here
             )
             logger.info(f"On-chain registration succeeded for {body.integrator_id_hex}")
         except Exception as e:
-            # Roll back the DB row — don't leave a half-registered integrator
             await db.execute("DELETE FROM integrators WHERE id = $1", row["id"])
             logger.error(f"On-chain registration failed for {body.integrator_id_hex}: {e}")
             raise HTTPException(status_code=500, detail=f"On-chain registration failed: {e}")
@@ -198,11 +198,10 @@ async def _register_integrator_on_chain(
     min_age_seconds: int,
     doc_max_age_seconds: int,
 ):
-    secret = settings.SPONSOR_STELLAR_SECRET
-    logger.info(f"Secret length: {len(secret)}, repr: {repr(secret[:10])}...")
-    keypair = Keypair.from_secret(secret.strip())
+    secret = settings.SPONSOR_STELLAR_SECRET.strip()
+    logger.info(f"Secret length: {len(secret)}, starts with: {repr(secret[:4])}")
+    keypair = Keypair.from_secret(secret)          # single init, correct name
     server = SorobanServer(settings.STELLAR_RPC_URL)
-    keypair = Keypair.from_secret(settings.BACKEND_STELLAR_SECRET)
 
     account = await asyncio.get_event_loop().run_in_executor(
         None, server.load_account, keypair.public_key
