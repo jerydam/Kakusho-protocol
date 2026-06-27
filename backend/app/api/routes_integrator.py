@@ -32,8 +32,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import asyncpg
 from datetime import datetime, timezone, timedelta
 from loguru import logger
-from stellar_sdk import Keypair, Network, TransactionBuilder, SorobanServer, xdr, scval
-
+from stellar_sdk import Keypair, Network, TransactionBuilder, SorobanServer, scval
 
 import asyncio
 from app.db.database import get_db
@@ -213,9 +212,9 @@ async def _register_integrator_on_chain(
             contract_id=settings.KYC_REGISTRY_CONTRACT_ID,
             function_name="register_integrator",
             parameters=[
-                xdr.ScVal.scv_bytes(bytes.fromhex(integrator_id_hex)),
+                scval.to_bytes(bytes.fromhex(integrator_id_hex)),
                 scval.to_uint32(min_age_seconds),
-                xdr.ScVal.scv_bytes(bytes.fromhex("0" * 64)),
+                scval.to_bytes(bytes.fromhex("0" * 64)),
                 scval.to_uint32(doc_max_age_seconds),
             ],
         )
