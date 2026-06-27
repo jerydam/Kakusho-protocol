@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'https://worrying-drucy-faucetdrops-aab2b1e1.koyeb.app';
 
 export async function PATCH(req: NextRequest) {
   const apiKey = req.headers.get('x-api-key') || '';

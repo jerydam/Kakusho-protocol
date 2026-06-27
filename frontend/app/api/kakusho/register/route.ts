@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiKeyCache } from '../_lib/apiKeyCache';
 
-const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'https://worrying-drucy-faucetdrops-aab2b1e1.koyeb.app';
 
 export async function POST(req: NextRequest) {
   const body = await req.json();

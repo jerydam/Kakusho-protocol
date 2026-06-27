@@ -1,7 +1,7 @@
 // app/api/kakusho/verify/integrator-info/route.ts
 import { NextRequest, NextResponse } from 'next/server';
 
-const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'https://worrying-drucy-faucetdrops-aab2b1e1.koyeb.app';
 
 export async function GET(req: NextRequest) {
   const integratorId = req.nextUrl.searchParams.get('integrator_id');

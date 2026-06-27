@@ -77,7 +77,7 @@ Cache-Control: public, max-age=31536000, immutable`} />
 
         <Section title="03 · CONFIGURE">
           <CodeBlock language="typescript" code={`// .env.local in your Next.js app
-NEXT_PUBLIC_KAKUSHO_RELAYER_URL=http://localhost:8000
+NEXT_PUBLIC_KAKUSHO_RELAYER_URL=https://worrying-drucy-faucetdrops-aab2b1e1.koyeb.app
 NEXT_PUBLIC_KAKUSHO_API_KEY=zkkyc_your_key_here
 NEXT_PUBLIC_WASM_URL=https://cdn.your-org.com/kyc_ocr.wasm
 NEXT_PUBLIC_ZKEY_URL=https://cdn.your-org.com/kyc_ocr_final.zkey`} />

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { execFile } from 'child_process';
 
-const RELAYER = process.env.Kakusho_RELAYER_URL || 'http://localhost:8000';
+const RELAYER = process.env.Kakusho_RELAYER_URL || 'https://worrying-drucy-faucetdrops-aab2b1e1.koyeb.app';
 const CONTRACT_ID = process.env.KYC_REGISTRY_CONTRACT_ID || '';
 const STELLAR_SOURCE = process.env.STELLAR_SOURCE_ACCOUNT || 'admin';
 const STELLAR_NETWORK = process.env.STELLAR_NETWORK || 'testnet';
