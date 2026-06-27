@@ -1,6 +1,6 @@
 {
   "name": "@kakusho/zk-kyc-sdk",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Client-side ZK KYC SDK. Generates Groth16 proofs entirely in the browser. No PII leaves the device.",
   "type": "module",
   "main": "./dist/index.cjs",

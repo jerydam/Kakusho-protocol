@@ -2,17 +2,18 @@ import { defineConfig } from "tsup";
 
 export default defineConfig([
   // Main SDK build — all entries except the worker
+  // Worker build
   {
     entry: {
-      "index": "src/index.ts",
-      "nfc": "src/nfc/index.ts",
-      "session": "src/session/index.ts",
-      "session-react": "src/session/react.tsx",
+      "kakusho-prover-worker": "src/prover/snarkjs_worker.ts",
     },
-    format: ["esm", "cjs"],
-    dts: true,
+    format: ["iife"],
+    globalName: "KakushoProverWorker",  // prevents the .global.js suffix
+    platform: "browser",
+    bundle: true,
+    dts: false,
     sourcemap: true,
-    clean: true,
+    clean: false,
     splitting: false,
   },
   // Worker build — separate, IIFE, fully self-contained
