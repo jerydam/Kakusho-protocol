@@ -26,9 +26,9 @@ export async function GET(req: NextRequest) {
   nonces.set(address.toLowerCase(), { nonce, expires });
 
   // Clean up expired nonces
-  for (const [key, val] of nonces.entries()) {
-    if (val.expires < Date.now()) nonces.delete(key);
-  }
-
+  for (const key of Array.from(nonces.keys())) {
+  const val = nonces.get(key)!;
+  if (val.expires < Date.now()) nonces.delete(key);
+}
   return NextResponse.json({ message, nonce });
 }
