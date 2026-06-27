@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { generateKycProof, submitProof } from "@kakusho/zk-kyc-sdk"
+import { generateKycProof, submitProof, KycRejectedError } from '@kakusho/zk-kyc-sdk';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Stage =
