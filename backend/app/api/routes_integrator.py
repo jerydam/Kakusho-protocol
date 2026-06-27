@@ -269,7 +269,7 @@ async def get_public_integrator_info(
         SELECT name, integrator_id_hex, min_age_seconds, doc_max_age_seconds,
                allowed_document_types, nfc_policy
         FROM integrators
-        WHERE id = $1 AND is_active = TRUE
+        WHERE integrator_id_hex = $1 AND is_active = TRUE
         """,
         integrator_id,
     )

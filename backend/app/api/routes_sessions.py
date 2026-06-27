@@ -56,9 +56,10 @@ async def create_session(
     db: asyncpg.Connection = Depends(get_db),
 ):
     integrator = await db.fetchrow(
-        "SELECT id FROM integrators WHERE id = $1 AND is_active = TRUE",
-        body.integrator_id,
-    )
+    "SELECT id FROM integrators WHERE integrator_id_hex = $1 AND is_active = TRUE",
+    body.integrator_id,
+)
+
     if not integrator:
         raise HTTPException(status_code=404, detail="Integrator not found or inactive")
 
