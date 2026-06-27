@@ -1,10 +1,39 @@
+# Kakusho Relayer — Python dependencies
+# Install: pip install -r requirements.txt
+#
+# NFC additions vs original:
+#   asn1crypto   — CMS/ASN.1 parsing for EF.SOD (Document Security Object)
+#   cryptography — RSA + ECDSA signature verification for Passive Authentication
+
+# ── Web framework ─────────────────────────────────────────────────────────────
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
+
+# ── Database ──────────────────────────────────────────────────────────────────
 asyncpg==0.29.0
+# statement_cache_size=0 is set in database.py for Supabase pgbouncer compatibility
+
+# ── Pydantic / settings ───────────────────────────────────────────────────────
 pydantic==2.9.2
 pydantic-settings==2.5.2
+
+# ── Stellar / Soroban ────────────────────────────────────────────────────────
 stellar-sdk==10.0.0
+
+# ── HTTP client (webhook delivery) ───────────────────────────────────────────
 httpx==0.27.2
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 loguru==0.7.2
+
+# ── Environment ───────────────────────────────────────────────────────────────
 python-dotenv==1.0.1
+
+# ── Background tasks (webhook retry scheduler) ───────────────────────────────
 apscheduler==3.10.4
+
+# ── NFC Passive Authentication ────────────────────────────────────────────────
+# ASN.1 / CMS parsing for EF.SOD (Document Security Object)
+asn1crypto==1.5.1
+# RSA + ECDSA signature verification against DS certificates and CSCA roots
+cryptography==43.0.3
