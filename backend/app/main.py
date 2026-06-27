@@ -10,7 +10,7 @@ from app.core.config import settings
 from app.db.database import create_pool, close_pool
 from app.api.routes_integrator import router as integrator_router
 from app.api.routes_proof import router as proof_router
-
+from app.api.routes_sessions import router as sessions_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,7 +40,7 @@ app.add_middleware(
 
 app.include_router(integrator_router)
 app.include_router(proof_router)
-
+app.include_router(sessions_router)
 
 @app.get("/health")
 async def health():
