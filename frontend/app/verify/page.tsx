@@ -1,15 +1,14 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { generateKycProof, submitProof, KycRejectedError } from '@kakusho/zk-kyc-sdk';
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { generateKycProof, submitProof } from '@kakusho/zk-kyc-sdk';
 
 type Stage =
   | 'loading_integrator'
   | 'already_verified'
   | 'connect_wallet'
-  | 'upload_document'
+  | 'capture_document'
   | 'capture_selfies'
   | 'generating_proof'
   | 'submitting'
@@ -47,7 +46,73 @@ const PROOF_STAGE_ORDER: ProofStage[] = [
   'ocr', 'liveness', 'fetching_wasm', 'fetching_zkey', 'computing_witness', 'generating_proof', 'done',
 ];
 
-// ─── Small UI primitives ──────────────────────────────────────────────────────
+const SELFIE_POSES: Selfie[] = [
+  { pose: 'left', label: 'LOOK LEFT', file: null, preview: null },
+  { pose: 'right', label: 'LOOK RIGHT', file: null, preview: null },
+  { pose: 'up', label: 'LOOK UP', file: null, preview: null },
+  { pose: 'down', label: 'LOOK DOWN', file: null, preview: null },
+];
+
+// ── Camera hook ───────────────────────────────────────────────────────────────
+
+function useCamera(active: boolean, facingMode: 'user' | 'environment' = 'environment') {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const [ready, setReady] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode, width: { ideal: 1280 }, height: { ideal: 720 } },
+        });
+        if (cancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.onloadedmetadata = () => setReady(true);
+        }
+      } catch (e: any) {
+        if (!cancelled) setError(e.message || 'Camera access denied');
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+      setReady(false);
+    };
+  }, [active, facingMode]);
+
+  function capture(): File | null {
+    if (!videoRef.current || !ready) return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    canvas.getContext('2d')!.drawImage(videoRef.current, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    const blob = dataURLtoBlob(dataUrl);
+    return new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+  }
+
+  return { videoRef, ready, error, capture };
+}
+
+function dataURLtoBlob(dataUrl: string): Blob {
+  const [header, data] = dataUrl.split(',');
+  const mime = header.match(/:(.*?);/)![1];
+  const binary = atob(data);
+  const arr = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) arr[i] = binary.charCodeAt(i);
+  return new Blob([arr], { type: mime });
+}
+
+// ── UI primitives ─────────────────────────────────────────────────────────────
 
 function KzSpinner({ sm }: { sm?: boolean }) {
   const s = sm ? 14 : 22;
@@ -81,7 +146,244 @@ function StepDot({ active, done, index }: { active: boolean; done: boolean; inde
   );
 }
 
-// ─── Main component ───────────────────────────────────────────────────────────
+// ── Document capture step ─────────────────────────────────────────────────────
+
+function DocumentCapture({ onCapture }: { onCapture: (file: File) => void }) {
+  const [captured, setCaptured] = useState<string | null>(null);
+  const [flash, setFlash] = useState(false);
+  const cam = useCamera(!captured, 'environment');
+
+  function shoot() {
+    const file = cam.capture();
+    if (!file) return;
+    setFlash(true);
+    setTimeout(() => setFlash(false), 150);
+    const url = URL.createObjectURL(file);
+    setCaptured(url);
+    onCapture(file);
+  }
+
+  function retake() {
+    setCaptured(null);
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="relative rounded-xl overflow-hidden bg-black" style={{ aspectRatio: '4/3' }}>
+        {!captured ? (
+          <>
+            <video
+              ref={cam.videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover"
+            />
+            {/* Document guide overlay */}
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+              <div
+                className="border-2 rounded-lg"
+                style={{
+                  width: '85%',
+                  height: '60%',
+                  borderColor: '#00D2FF60',
+                  boxShadow: '0 0 0 9999px rgba(0,0,0,0.45)',
+                }}
+              />
+            </div>
+            <div className="absolute bottom-3 left-0 right-0 flex justify-center">
+              <p className="kz-mono text-[9px] text-white/60 tracking-widest bg-black/40 px-3 py-1 rounded-full">
+                ALIGN DOCUMENT IN FRAME
+              </p>
+            </div>
+            {flash && <div className="absolute inset-0 bg-white opacity-70 pointer-events-none" />}
+            {cam.error && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+                <p className="kz-mono text-[10px] text-kz-danger text-center px-4">{cam.error}</p>
+              </div>
+            )}
+            {!cam.ready && !cam.error && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                <KzSpinner />
+              </div>
+            )}
+          </>
+        ) : (
+          <img src={captured} alt="Captured document" className="w-full h-full object-cover" />
+        )}
+      </div>
+
+      {!captured ? (
+        <button
+          onClick={shoot}
+          disabled={!cam.ready}
+          className="kz-btn-connect w-full py-4 disabled:opacity-30"
+        >
+          <div className="kz-btn-scan" />
+          <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="5" stroke="currentColor" strokeWidth="1.4" />
+              <circle cx="8" cy="8" r="2.5" fill="#00D2FF" />
+            </svg>
+            CAPTURE DOCUMENT
+          </span>
+        </button>
+      ) : (
+        <div className="flex gap-3">
+          <button
+            onClick={retake}
+            className="flex-1 py-3 rounded-xl border border-white/20 kz-mono text-[10px] tracking-widest text-white/60 hover:text-white hover:border-white/40 transition-all"
+          >
+            RETAKE
+          </button>
+          <button
+            onClick={() => {/* already called onCapture on shoot */}}
+            className="flex-1 kz-btn-connect py-3"
+          >
+            <div className="kz-btn-scan" />
+            <span className="relative z-10 kz-mono text-[10px] tracking-widest font-bold">USE THIS</span>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Selfie capture step ───────────────────────────────────────────────────────
+
+function SelfieCapture({ selfies, onCapture }: {
+  selfies: Selfie[];
+  onCapture: (index: number, file: File, preview: string) => void;
+}) {
+  const currentIndex = selfies.findIndex(s => !s.file);
+  const done = currentIndex === -1;
+  const [flash, setFlash] = useState(false);
+  const cam = useCamera(!done, 'user');
+  const current = done ? null : selfies[currentIndex];
+
+  function shoot() {
+    const file = cam.capture();
+    if (!file || !current) return;
+    setFlash(true);
+    setTimeout(() => setFlash(false), 150);
+    const preview = URL.createObjectURL(file);
+    onCapture(currentIndex, file, preview);
+  }
+
+  const arrowRotation = { left: 180, right: 0, up: -90, down: 90 };
+
+  return (
+    <div className="space-y-4">
+      {/* Captured thumbnails */}
+      <div className="grid grid-cols-4 gap-2">
+        {selfies.map((s, i) => (
+          <div
+            key={s.pose}
+            className="relative rounded-lg overflow-hidden flex items-center justify-center"
+            style={{
+              aspectRatio: '1',
+              background: s.preview ? 'transparent' : '#0a0a0f',
+              border: `1px solid ${i === currentIndex ? '#00D2FF40' : s.file ? '#00D2FF30' : '#ffffff14'}`,
+            }}
+          >
+            {s.preview ? (
+              <>
+                <img src={s.preview} alt={s.pose} className="w-full h-full object-cover" />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/30">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M2 7L5.5 10.5L12 4" stroke="#00D2FF" strokeWidth="1.4" strokeLinecap="round" />
+                  </svg>
+                </div>
+              </>
+            ) : (
+              <svg
+                width="16" height="16" viewBox="0 0 24 24" fill="none"
+                style={{ transform: `rotate(${arrowRotation[s.pose]}deg)`, opacity: i === currentIndex ? 0.8 : 0.2 }}
+              >
+                <path d="M5 12H19M19 12L13 6M19 12L13 18" stroke="#00D2FF" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Camera view */}
+      <div className="relative rounded-xl overflow-hidden bg-black" style={{ aspectRatio: '3/4' }}>
+        {!done ? (
+          <>
+            <video
+              ref={cam.videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover scale-x-[-1]"
+            />
+            {/* Pose instruction overlay */}
+            {current && (
+              <div className="absolute inset-0 flex flex-col items-center justify-between py-6 pointer-events-none">
+                <div className="bg-black/50 backdrop-blur-sm px-4 py-2 rounded-full">
+                  <p className="kz-mono text-[11px] text-kz-cyan tracking-widest font-bold">
+                    {current.label}
+                  </p>
+                </div>
+                <div className="flex items-center justify-center">
+                  <svg
+                    width="48" height="48" viewBox="0 0 24 24" fill="none"
+                    style={{ transform: `rotate(${arrowRotation[current.pose]}deg)`, opacity: 0.7 }}
+                    className="animate-pulse"
+                  >
+                    <path d="M5 12H19M19 12L13 6M19 12L13 18" stroke="#00D2FF" strokeWidth="1.5" strokeLinecap="round" />
+                  </svg>
+                </div>
+                <div className="kz-mono text-[9px] text-white/40 tracking-widest">
+                  {selfies.filter(s => s.file).length} / 4 CAPTURED
+                </div>
+              </div>
+            )}
+            {flash && <div className="absolute inset-0 bg-white opacity-70 pointer-events-none" />}
+            {cam.error && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+                <p className="kz-mono text-[10px] text-kz-danger text-center px-4">{cam.error}</p>
+              </div>
+            )}
+            {!cam.ready && !cam.error && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/60">
+                <KzSpinner />
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center gap-3 bg-kz-voidRaised">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <circle cx="20" cy="20" r="18" stroke="#00D2FF" strokeWidth="1.5" opacity="0.3" />
+              <path d="M12 20L17 25L28 14" stroke="#00D2FF" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            <p className="kz-mono text-[10px] text-kz-cyan tracking-widest">ALL POSES CAPTURED</p>
+          </div>
+        )}
+      </div>
+
+      {!done && (
+        <button
+          onClick={shoot}
+          disabled={!cam.ready}
+          className="kz-btn-connect w-full py-4 disabled:opacity-30"
+        >
+          <div className="kz-btn-scan" />
+          <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="5" stroke="currentColor" strokeWidth="1.4" />
+              <circle cx="8" cy="8" r="2.5" fill="#00D2FF" />
+            </svg>
+            CAPTURE · {current?.label}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function VerifyPage() {
   const searchParams = useSearchParams();
@@ -89,59 +391,24 @@ export default function VerifyPage() {
   const callbackUrl = searchParams.get('callback_url') || '';
   const stateParam = searchParams.get('state') || '';
 
-  // Integrator info
   const [integrator, setIntegrator] = useState<IntegratorInfo | null>(null);
-
-  // Stage
   const [stage, setStage] = useState<Stage>('loading_integrator');
   const [error, setError] = useState('');
-
-  // Wallet
   const [walletAddress, setWalletAddress] = useState('');
   const [connectingWallet, setConnectingWallet] = useState(false);
-
-  // Document upload
   const [docFile, setDocFile] = useState<File | null>(null);
-  const [docPreview, setDocPreview] = useState<string | null>(null);
-  const docInputRef = useRef<HTMLInputElement>(null);
-
-  // Selfies
-  const [selfies, setSelfies] = useState<Selfie[]>([
-    { pose: 'left', label: 'LOOK LEFT', file: null, preview: null },
-    { pose: 'right', label: 'LOOK RIGHT', file: null, preview: null },
-    { pose: 'up', label: 'LOOK UP', file: null, preview: null },
-    { pose: 'down', label: 'LOOK DOWN', file: null, preview: null },
-  ]);
-  const selfieRefs = useRef<(HTMLInputElement | null)[]>([]);
-
-  // Proof progress
+  const [selfies, setSelfies] = useState<Selfie[]>(SELFIE_POSES);
   const [proofStage, setProofStage] = useState<ProofStage | null>(null);
   const [txHash, setTxHash] = useState<string | undefined>(undefined);
 
-  // ── Load integrator info ─────────────────────────────────────────────────
-
+  // Load integrator
   useEffect(() => {
-    if (!integratorId) {
-      setError('Missing integrator_id parameter.');
-      setStage('error');
-      return;
-    }
+    if (!integratorId) { setError('Missing integrator_id parameter.'); setStage('error'); return; }
     fetch(`/api/kakusho/verify/integrator-info?integrator_id=${integratorId}`)
-      .then((r) => {
-        if (!r.ok) throw new Error('Integrator not found.');
-        return r.json();
-      })
-      .then((d: IntegratorInfo) => {
-        setIntegrator(d);
-        setStage('connect_wallet');
-      })
-      .catch((e) => {
-        setError(e.message || 'Failed to load integrator.');
-        setStage('error');
-      });
+      .then(r => { if (!r.ok) throw new Error('Integrator not found.'); return r.json(); })
+      .then((d: IntegratorInfo) => { setIntegrator(d); setStage('connect_wallet'); })
+      .catch(e => { setError(e.message || 'Failed to load integrator.'); setStage('error'); });
   }, [integratorId]);
-
-  // ── Wallet connect ───────────────────────────────────────────────────────
 
   async function connectWallet() {
     setConnectingWallet(true);
@@ -154,17 +421,13 @@ export default function VerifyPage() {
       if (access.error) throw new Error(access.error.message || 'Connection rejected');
       if (!access.address) throw new Error('No address returned');
       setWalletAddress(access.address);
-
-      // Check if already verified for this integrator
-      const check = await fetch(
-        `/api/kakusho/verify/status?integrator_id=${integratorId}&stellar_address=${access.address}`,
-      );
+      const check = await fetch(`/api/kakusho/verify/status?integrator_id=${integratorId}&stellar_address=${access.address}`);
       const status = await check.json();
       if (status.verified) {
         setStage('already_verified');
         if (callbackUrl) redirectWithResult(access.address, true);
       } else {
-        setStage('upload_document');
+        setStage('capture_document');
       }
     } catch (e: any) {
       setError(e.message || 'Wallet connection failed.');
@@ -173,42 +436,29 @@ export default function VerifyPage() {
     }
   }
 
-  // ── Document upload ──────────────────────────────────────────────────────
-
-  function handleDocChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setDocFile(f);
-    setDocPreview(URL.createObjectURL(f));
+  function handleDocCapture(file: File) {
+    setDocFile(file);
   }
 
-  // ── Selfie capture ───────────────────────────────────────────────────────
-
-  function handleSelfieChange(index: number, e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    setSelfies((prev) => {
+  function handleSelfieCapture(index: number, file: File, preview: string) {
+    setSelfies(prev => {
       const next = [...prev];
-      next[index] = { ...next[index], file: f, preview: URL.createObjectURL(f) };
+      next[index] = { ...next[index], file, preview };
       return next;
     });
   }
 
-  // ── Proof generation + submission ────────────────────────────────────────
+  const allSelfiesDone = selfies.every(s => s.file !== null);
 
   async function startProof() {
-    if (!docFile || selfies.some((s) => !s.file)) return;
+    if (!docFile || !allSelfiesDone) return;
     setStage('generating_proof');
     setError('');
-
     try {
-
-      // Fetch integrator assets (country code map + restricted tree)
       const [countryCodeMap, restrictedTree] = await Promise.all([
-        fetch('/assets/country_codes.json').then((r) => r.json()),
-        fetch('/assets/restricted_tree.json').then((r) => r.json()),
+        fetch('/assets/country_codes.json').then(r => r.json()),
+        fetch('/assets/restricted_tree.json').then(r => r.json()),
       ]);
-
       const integratorAssets = {
         integratorId: integrator!.integrator_id_hex,
         minAgeSeconds: BigInt(integrator!.min_age_years * 365 * 24 * 3600),
@@ -216,10 +466,9 @@ export default function VerifyPage() {
         countryCodeMap,
         restrictedTree,
       };
-
       const proof = await generateKycProof({
         idDocument: docFile,
-        selfies: selfies.map((s) => s.file!) as [File, File, File, File],
+        selfies: selfies.map(s => s.file!) as [File, File, File, File],
         integratorAssets,
         proverAssets: {
           wasmUrl: process.env.NEXT_PUBLIC_WASM_URL!,
@@ -227,20 +476,16 @@ export default function VerifyPage() {
         },
         onProgress: (s: ProofStage) => setProofStage(s),
       });
-
       setStage('submitting');
-
       const result = await submitProof(
         proof,
         process.env.NEXT_PUBLIC_KAKUSHO_RELAYER_URL!,
         process.env.NEXT_PUBLIC_KAKUSHO_API_KEY!,
         walletAddress,
       );
-
       setTxHash(result.tx_hash ?? undefined);
       setStage('done');
-
-    if (callbackUrl) redirectWithResult(walletAddress, true, result.tx_hash ?? undefined);
+      if (callbackUrl) redirectWithResult(walletAddress, true, result.tx_hash ?? undefined);
     } catch (e: any) {
       setError(e.reason ? `${e.reason}: ${e.message}` : e.message || 'Proof generation failed.');
       setStage('error');
@@ -256,95 +501,73 @@ export default function VerifyPage() {
     setTimeout(() => window.location.href = url.toString(), 2200);
   }
 
-  // ── Step tracker ─────────────────────────────────────────────────────────
-
-  const STEPS = ['Connect wallet', 'Upload document', 'Liveness selfies', 'Generate proof'];
+  const STEPS = ['Connect wallet', 'Capture ID', 'Liveness check', 'Generate proof'];
   const stepIndex: Record<Stage, number> = {
-    loading_integrator: -1,
-    already_verified: 4,
-    connect_wallet: 0,
-    upload_document: 1,
-    capture_selfies: 2,
-    generating_proof: 3,
-    submitting: 3,
-    done: 4,
-    error: -1,
+    loading_integrator: -1, already_verified: 4, connect_wallet: 0,
+    capture_document: 1, capture_selfies: 2, generating_proof: 3,
+    submitting: 3, done: 4, error: -1,
   };
   const currentStep = stepIndex[stage] ?? -1;
 
-  const selfielsDone = selfies.every((s) => s.file !== null);
+  // ── Render ────────────────────────────────────────────────────────────────
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // RENDER
-  // ─────────────────────────────────────────────────────────────────────────
+  if (stage === 'loading_integrator') return (
+    <Shell>
+      <div className="flex flex-col items-center gap-4 py-16">
+        <KzSpinner />
+        <p className="kz-mono text-[10px] tracking-widest text-kz-slate">LOADING_INTEGRATOR...</p>
+      </div>
+    </Shell>
+  );
 
-  if (stage === 'loading_integrator') {
-    return (
-      <Shell>
-        <div className="flex flex-col items-center gap-4 py-16">
-          <KzSpinner />
-          <p className="kz-mono text-[10px] tracking-widest text-kz-slate">LOADING_INTEGRATOR...</p>
+  if (stage === 'error') return (
+    <Shell>
+      <div className="kz-panel text-center py-10 px-6">
+        <div className="kz-error-box mb-6">
+          <p className="kz-mono text-[10px] text-kz-danger tracking-wider">{error}</p>
         </div>
-      </Shell>
-    );
-  }
+        <p className="kz-mono text-[9px] text-kz-slate/50 tracking-widest">
+          Contact the app that sent you here for support.
+        </p>
+      </div>
+    </Shell>
+  );
 
-  if (stage === 'error') {
-    return (
-      <Shell>
-        <div className="kz-panel text-center py-10 px-6">
-          <div className="kz-error-box mb-6">
-            <p className="kz-mono text-[10px] text-kz-danger tracking-wider">{error}</p>
+  if (stage === 'already_verified') return (
+    <Shell integrator={integrator!}>
+      <div className="kz-panel text-center py-12 px-6">
+        <VerifiedBadge />
+        <h2 className="kz-display text-2xl font-bold text-white mb-2 mt-6">Already verified</h2>
+        <p className="kz-mono text-[10px] text-kz-cyan/50 tracking-widest mb-2">{walletAddress}</p>
+        <p className="kz-mono text-[10px] text-kz-slate mt-4 tracking-wide">
+          {callbackUrl ? 'Redirecting you back…' : 'Your proof is on-chain for this integrator.'}
+        </p>
+      </div>
+    </Shell>
+  );
+
+  if (stage === 'done') return (
+    <Shell integrator={integrator!}>
+      <div className="kz-panel text-center py-12 px-6">
+        <VerifiedBadge />
+        <h2 className="kz-display text-2xl font-bold text-white mb-2 mt-6">Proof verified</h2>
+        <p className="kz-mono text-[10px] text-kz-slate mt-1 tracking-wide mb-6">
+          Your identity is anchored on Soroban — no personal data was transmitted.
+        </p>
+        {txHash && (
+          <div className="bg-kz-voidRaised border border-kz-surfaceLine rounded-lg px-4 py-3 mb-4">
+            <p className="kz-mono text-[9px] text-kz-cyan/40 tracking-widest mb-1">TX_HASH</p>
+            <p className="kz-mono text-[10px] text-white/60 break-all">{txHash}</p>
           </div>
+        )}
+        {callbackUrl && (
           <p className="kz-mono text-[9px] text-kz-slate/50 tracking-widest">
-            Contact the app that sent you here for support.
+            Redirecting back to {new URL(callbackUrl).hostname}…
           </p>
-        </div>
-      </Shell>
-    );
-  }
-
-  if (stage === 'already_verified') {
-    return (
-      <Shell integrator={integrator!}>
-        <div className="kz-panel text-center py-12 px-6">
-          <VerifiedBadge />
-          <h2 className="kz-display text-2xl font-bold text-white mb-2 mt-6">Already verified</h2>
-          <p className="kz-mono text-[10px] text-kz-cyan/50 tracking-widest mb-2">
-            {walletAddress}
-          </p>
-          <p className="kz-mono text-[10px] text-kz-slate mt-4 tracking-wide">
-            {callbackUrl ? 'Redirecting you back…' : 'Your proof is on-chain for this integrator.'}
-          </p>
-        </div>
-      </Shell>
-    );
-  }
-
-  if (stage === 'done') {
-    return (
-      <Shell integrator={integrator!}>
-        <div className="kz-panel text-center py-12 px-6">
-          <VerifiedBadge />
-          <h2 className="kz-display text-2xl font-bold text-white mb-2 mt-6">Proof verified</h2>
-          <p className="kz-mono text-[10px] text-kz-slate mt-1 tracking-wide mb-6">
-            Your identity is anchored on Soroban — no personal data was transmitted.
-          </p>
-          {txHash && (
-            <div className="bg-kz-voidRaised border border-kz-surfaceLine rounded-lg px-4 py-3 mb-4">
-              <p className="kz-mono text-[9px] text-kz-cyan/40 tracking-widest mb-1">TX_HASH</p>
-              <p className="kz-mono text-[10px] text-white/60 break-all">{txHash}</p>
-            </div>
-          )}
-          {callbackUrl && (
-            <p className="kz-mono text-[9px] text-kz-slate/50 tracking-widest">
-              Redirecting back to {new URL(callbackUrl).hostname}…
-            </p>
-          )}
-        </div>
-      </Shell>
-    );
-  }
+        )}
+      </div>
+    </Shell>
+  );
 
   if (stage === 'generating_proof' || stage === 'submitting') {
     const stageIdx = proofStage ? PROOF_STAGE_ORDER.indexOf(proofStage) : -1;
@@ -353,7 +576,7 @@ export default function VerifyPage() {
         <div className="kz-panel py-10 px-6">
           <p className="kz-mono text-[9px] tracking-widest text-kz-cyan/50 mb-6">PROOF_GENERATION</p>
           <div className="space-y-3">
-            {PROOF_STAGE_ORDER.filter((s) => s !== 'done').map((s, i) => {
+            {PROOF_STAGE_ORDER.filter(s => s !== 'done').map((s, i) => {
               const isDone = stageIdx > i;
               const isActive = stageIdx === i;
               return (
@@ -369,9 +592,7 @@ export default function VerifyPage() {
                       <svg width="9" height="9" viewBox="0 0 9 9" fill="none">
                         <path d="M2 4.5L3.5 6L7 3" stroke="#00D2FF" strokeWidth="1.4" strokeLinecap="round" />
                       </svg>
-                    ) : isActive ? (
-                      <KzSpinner sm />
-                    ) : null}
+                    ) : isActive ? <KzSpinner sm /> : null}
                   </div>
                   <span
                     className="kz-mono text-[10px] tracking-widest transition-colors"
@@ -397,8 +618,6 @@ export default function VerifyPage() {
     );
   }
 
-  // ── Multi-step main flow ─────────────────────────────────────────────────
-
   return (
     <Shell integrator={integrator!}>
       {/* Step progress */}
@@ -421,7 +640,7 @@ export default function VerifyPage() {
         </div>
       </div>
 
-      {/* ── Step 0: Connect wallet ────────────────────────────────────────── */}
+      {/* Step 0: Connect wallet */}
       {stage === 'connect_wallet' && (
         <div className="kz-panel">
           <p className="kz-mono text-[9px] tracking-widest text-kz-cyan/50 mb-6">STEP_01 · WALLET</p>
@@ -435,7 +654,7 @@ export default function VerifyPage() {
             </div>
             <h2 className="kz-display text-xl font-bold text-white mb-2">Connect your wallet</h2>
             <p className="kz-mono text-[10px] text-kz-slate tracking-wide mb-8 max-w-xs mx-auto leading-relaxed">
-              Sign in with Freighter to prove ownership of your Stellar address. No personal data is shared.
+              Sign in with Freighter to prove ownership of your Stellar address.
             </p>
             {error && (
               <div className="kz-error-box mb-5 text-left">
@@ -445,20 +664,16 @@ export default function VerifyPage() {
             <button onClick={connectWallet} disabled={connectingWallet} className="kz-btn-connect w-full py-4">
               <div className="kz-btn-scan" />
               <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
-                {connectingWallet ? (
-                  <><KzSpinner sm />CONNECTING...</>
-                ) : (
-                  <>
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                      <path d="M7 1L13 7L7 13M1 7H13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                    </svg>
-                    CONNECT FREIGHTER
-                  </>
-                )}
+                {connectingWallet ? <><KzSpinner sm />CONNECTING...</> : <>
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                    <path d="M7 1L13 7L7 13M1 7H13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                  CONNECT FREIGHTER
+                </>}
               </span>
             </button>
             <p className="kz-mono text-[9px] text-white/20 mt-4 tracking-widest">
-              Don't have Freighter?{' '}
+              Don&apos;t have Freighter?{' '}
               <a href="https://freighter.app" target="_blank" rel="noopener noreferrer" className="text-kz-cyan/40 hover:text-kz-cyan transition-colors">
                 freighter.app →
               </a>
@@ -467,8 +682,8 @@ export default function VerifyPage() {
         </div>
       )}
 
-      {/* ── Step 1: Upload document ───────────────────────────────────────── */}
-      {stage === 'upload_document' && (
+      {/* Step 1: Capture document */}
+      {stage === 'capture_document' && (
         <div className="kz-panel">
           <div className="flex items-center justify-between mb-6">
             <p className="kz-mono text-[9px] tracking-widest text-kz-cyan/50">STEP_02 · DOCUMENT</p>
@@ -476,156 +691,62 @@ export default function VerifyPage() {
               {walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}
             </span>
           </div>
-          <h2 className="kz-display text-xl font-bold text-white mb-1">Upload your ID</h2>
-          <p className="kz-mono text-[10px] text-kz-slate tracking-wide mb-6 leading-relaxed">
-            Passport, national ID, or driver's license. OCR runs locally — the image never leaves your device.
+          <h2 className="kz-display text-xl font-bold text-white mb-1">Capture your ID</h2>
+          <p className="kz-mono text-[10px] text-kz-slate tracking-wide mb-5 leading-relaxed">
+            Position your passport, national ID, or driver&apos;s license in the frame.
           </p>
-
-          {/* Drop zone */}
-          <div
-            onClick={() => docInputRef.current?.click()}
-            className="relative border border-dashed rounded-xl flex flex-col items-center justify-center py-10 px-6 cursor-pointer transition-all mb-5"
-            style={{ borderColor: docPreview ? '#00D2FF40' : '#ffffff18', background: docPreview ? '#00D2FF06' : '#0a0a0f' }}
-          >
-            {docPreview ? (
-              <>
-                <img src={docPreview} alt="ID document" className="max-h-40 rounded-lg object-contain mb-3" />
-                <p className="kz-mono text-[9px] text-kz-cyan tracking-widest">
-                  {docFile?.name} · {(docFile!.size / 1024).toFixed(0)} KB
-                </p>
-                <p className="kz-mono text-[9px] text-white/20 mt-1 tracking-widest">Click to replace</p>
-              </>
-            ) : (
-              <>
-                <svg width="32" height="32" viewBox="0 0 32 32" fill="none" className="mb-4 opacity-30">
-                  <rect x="4" y="6" width="24" height="20" rx="3" stroke="#00D2FF" strokeWidth="1.2" />
-                  <path d="M10 16H22M16 10V22" stroke="#00D2FF" strokeWidth="1.2" strokeLinecap="round" />
+          <DocumentCapture onCapture={handleDocCapture} />
+          {docFile && (
+            <button
+              onClick={() => setStage('capture_selfies')}
+              className="kz-btn-connect w-full py-4 mt-4"
+            >
+              <div className="kz-btn-scan" />
+              <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <path d="M7 1L13 7L7 13M1 7H13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
                 </svg>
-                <p className="kz-mono text-[10px] text-white/40 tracking-widest mb-1">CLICK TO UPLOAD</p>
-                <p className="kz-mono text-[9px] text-white/20 tracking-widest">JPG, PNG, HEIC · max 10 MB</p>
-              </>
-            )}
-            <input ref={docInputRef} type="file" accept="image/*" className="hidden" onChange={handleDocChange} />
-          </div>
-
-          {error && (
-            <div className="kz-error-box mb-4">
-              <span className="kz-mono text-[10px] text-kz-danger tracking-wider">{error}</span>
-            </div>
+                CONTINUE
+              </span>
+            </button>
           )}
-
-          <button
-            onClick={() => docFile && setStage('capture_selfies')}
-            disabled={!docFile}
-            className="kz-btn-connect w-full py-4 disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <div className="kz-btn-scan" />
-            <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <path d="M7 1L13 7L7 13M1 7H13" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-              CONTINUE
-            </span>
-          </button>
         </div>
       )}
 
-      {/* ── Step 2: Selfies ───────────────────────────────────────────────── */}
+      {/* Step 2: Selfies */}
       {stage === 'capture_selfies' && (
         <div className="kz-panel">
           <div className="flex items-center justify-between mb-6">
             <p className="kz-mono text-[9px] tracking-widest text-kz-cyan/50">STEP_03 · LIVENESS</p>
             <button
-              onClick={() => setStage('upload_document')}
+              onClick={() => setStage('capture_document')}
               className="kz-mono text-[9px] text-white/30 hover:text-white/60 tracking-widest transition-colors"
             >
               ← BACK
             </button>
           </div>
           <h2 className="kz-display text-xl font-bold text-white mb-1">Liveness check</h2>
-          <p className="kz-mono text-[10px] text-kz-slate tracking-wide mb-6 leading-relaxed">
-            Take four photos in each direction. Use your device camera or upload photos.
+          <p className="kz-mono text-[10px] text-kz-slate tracking-wide mb-5 leading-relaxed">
+            Follow the arrows and capture each pose.
           </p>
-
-          <div className="grid grid-cols-2 gap-3 mb-6">
-            {selfies.map((s, i) => (
-              <div
-                key={s.pose}
-                onClick={() => selfieRefs.current[i]?.click()}
-                className="relative rounded-xl border cursor-pointer flex flex-col items-center justify-center py-6 transition-all"
-                style={{
-                  borderColor: s.preview ? '#00D2FF40' : '#ffffff14',
-                  background: s.preview ? '#00D2FF06' : '#0a0a0f',
-                  minHeight: 110,
-                }}
-              >
-                {s.preview ? (
-                  <>
-                    <img src={s.preview} alt={s.pose} className="w-16 h-16 rounded-lg object-cover mb-2" />
-                    <span className="kz-mono text-[8px] text-kz-cyan tracking-widest">{s.label}</span>
-                    <div className="absolute top-2 right-2 w-4 h-4 rounded-full bg-kz-cyan/10 border border-kz-cyan/40 flex items-center justify-center">
-                      <svg width="8" height="8" viewBox="0 0 8 8" fill="none">
-                        <path d="M1.5 4L3 5.5L6.5 2" stroke="#00D2FF" strokeWidth="1.2" strokeLinecap="round" />
-                      </svg>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <SelfieArrow pose={s.pose} />
-                    <span className="kz-mono text-[9px] text-white/30 tracking-widest mt-3">{s.label}</span>
-                  </>
-                )}
-                <input
-                  ref={(el) => { selfieRefs.current[i] = el; }}
-                  type="file"
-                  accept="image/*"
-                  capture="user"
-                  className="hidden"
-                  onChange={(e) => handleSelfieChange(i, e)}
-                />
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-2 mb-6">
-            {selfies.map((s) => (
-              <div
-                key={s.pose}
-                className="flex-1 h-0.5 rounded-full transition-all duration-300"
-                style={{ background: s.file ? '#00D2FF50' : '#ffffff0a' }}
-              />
-            ))}
-          </div>
-
-          {error && (
-            <div className="kz-error-box mb-4">
-              <span className="kz-mono text-[10px] text-kz-danger tracking-wider">{error}</span>
-            </div>
+          <SelfieCapture selfies={selfies} onCapture={handleSelfieCapture} />
+          {allSelfiesDone && (
+            <button onClick={startProof} className="kz-btn-connect w-full py-4 mt-4">
+              <div className="kz-btn-scan" />
+              <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                  <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.2" />
+                  <path d="M4 7L6 9L10 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+                </svg>
+                GENERATE PROOF
+              </span>
+            </button>
           )}
-
-          <button
-            onClick={startProof}
-            disabled={!selfielsDone}
-            className="kz-btn-connect w-full py-4 disabled:opacity-30 disabled:cursor-not-allowed"
-          >
-            <div className="kz-btn-scan" />
-            <span className="relative z-10 flex items-center justify-center gap-3 kz-mono text-sm tracking-[0.2em] font-bold">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-                <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M4 7L6 9L10 5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-              GENERATE PROOF
-            </span>
-          </button>
-
-          <p className="kz-mono text-[9px] text-white/20 mt-4 text-center tracking-widest">
-            {selfies.filter((s) => s.file).length} / 4 POSES CAPTURED
-          </p>
         </div>
       )}
 
-      {/* What gets verified panel */}
-      {(stage === 'connect_wallet' || stage === 'upload_document' || stage === 'capture_selfies') && integrator && (
+      {/* Verification rules */}
+      {(stage === 'connect_wallet' || stage === 'capture_document' || stage === 'capture_selfies') && integrator && (
         <div className="kz-panel mt-5 border-kz-surfaceLine/60">
           <p className="kz-mono text-[9px] tracking-widest text-kz-slate mb-4">VERIFICATION_RULES</p>
           <div className="space-y-2.5">
@@ -635,21 +756,17 @@ export default function VerifyPage() {
               <RuleRow label="RESTRICTED" value={`${integrator.restricted_countries.length} jurisdictions excluded`} danger />
             )}
           </div>
-          <p className="kz-mono text-[9px] text-white/20 mt-4 tracking-widest leading-relaxed">
-            Only a cryptographic proof is sent on-chain. Your document details remain private.
-          </p>
         </div>
       )}
     </Shell>
   );
 }
 
-// ─── Helper sub-components ────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
 
 function Shell({ children, integrator }: { children: React.ReactNode; integrator?: IntegratorInfo | null }) {
   return (
     <div className="min-h-screen bg-kz-void flex flex-col">
-      {/* Top bar */}
       <div className="border-b border-kz-surfaceLine px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
@@ -665,22 +782,16 @@ function Shell({ children, integrator }: { children: React.ReactNode; integrator
           </div>
         )}
       </div>
-
-      {/* Body */}
       <div className="flex-1 flex flex-col items-center justify-start py-10 px-4">
         {integrator && (
           <div className="w-full max-w-sm mb-5 text-center">
             <p className="kz-mono text-[9px] text-kz-cyan/50 tracking-widest mb-1">IDENTITY VERIFICATION</p>
             <h1 className="kz-display text-2xl font-bold text-white">{integrator.name}</h1>
-            <p className="kz-mono text-[9px] text-kz-slate tracking-widest mt-1">
-              requires ZK KYC via Kakushō Protocol
-            </p>
+            <p className="kz-mono text-[9px] text-kz-slate tracking-widest mt-1">requires ZK KYC via Kakushō Protocol</p>
           </div>
         )}
         <div className="w-full max-w-sm">{children}</div>
       </div>
-
-      {/* Footer */}
       <div className="border-t border-kz-surfaceLine px-6 py-4 text-center">
         <p className="kz-mono text-[9px] text-white/20 tracking-widest">
           POWERED BY KAKUSHŌ · ZERO-KNOWLEDGE KYC · NO PII ON-CHAIN
@@ -712,20 +823,5 @@ function RuleRow({ label, value, danger }: { label: string; value: string; dange
         {value}
       </span>
     </div>
-  );
-}
-
-function SelfieArrow({ pose }: { pose: 'left' | 'right' | 'up' | 'down' }) {
-  const rotation = { left: 180, right: 0, up: -90, down: 90 }[pose];
-  return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      style={{ transform: `rotate(${rotation}deg)`, opacity: 0.35 }}
-    >
-      <path d="M5 12H19M19 12L13 6M19 12L13 18" stroke="#00D2FF" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
   );
 }
