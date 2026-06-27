@@ -1,0 +1,11 @@
+node_modules/
+ios/Pods/
+ios/build/
+android/.gradle/
+android/app/build/
+android/build/
+*.keystore
+*.jks
+.env
+.env.*
+!.env.example

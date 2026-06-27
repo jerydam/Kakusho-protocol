@@ -1,0 +1,19 @@
+{
+  "_comment": "This is NOT a full package.json to drop in — react-native init generates one with the correct RN version, scripts, and metro/jest config for whatever RN release is current. Add the dependencies and devDependencies below to the generated file instead of overwriting it.",
+
+  "dependencies_to_add": {
+    "@react-navigation/native": "^6",
+    "@react-navigation/native-stack": "^6",
+    "react-native-screens": "^3",
+    "react-native-safe-area-context": "^4",
+    "react-native-url-polyfill": "^2",
+    "axios": "^1",
+    "react-native-nfc-passport-info": "latest"
+  },
+
+  "devDependencies_to_add": {
+    "@types/react": "^18"
+  },
+
+  "install_command": "npm install @react-navigation/native @react-navigation/native-stack react-native-screens react-native-safe-area-context react-native-url-polyfill axios react-native-nfc-passport-info"
+}
