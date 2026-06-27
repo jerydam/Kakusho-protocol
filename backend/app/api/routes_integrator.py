@@ -166,12 +166,13 @@ async def create_integrator(
     logger.info(f"Created relayer account for integrator {body.integrator_id_hex}")
 
     # Register on-chain atomically
-    if settings.KYC_REGISTRY_CONTRACT_ID and settings.BACKEND_STELLAR_SECRET:
+    if settings.KYC_REGISTRY_CONTRACT_ID and settings.SPONSOR_STELLAR_SECRET:
         try:
             await _register_integrator_on_chain(
                 integrator_id_hex=body.integrator_id_hex,
                 min_age_seconds=min_age_seconds,
                 doc_max_age_seconds=doc_max_age_seconds,
+                keypair = Keypair.from_secret(settings.SPONSOR_STELLAR_SECRET)
             )
             logger.info(f"On-chain registration succeeded for {body.integrator_id_hex}")
         except Exception as e:
