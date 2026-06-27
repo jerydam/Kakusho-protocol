@@ -4,7 +4,7 @@ const nextConfig = {
     return [
       {
         source: '/api/kakusho/:path*',
-        destination: 'http://127.0.0.1:8000/:path*',
+        destination: 'https://worrying-drucy-faucetdrops-aab2b1e1.koyeb.app/:path*',
       },
     ];
   },
