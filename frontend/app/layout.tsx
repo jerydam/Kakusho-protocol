@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { Plus_Jakarta_Sans, Space_Mono } from 'next/font/google';
+import { Plus_Jakarta_Sans } from 'next/font/google';
+import localFont from 'next/font/local';
 import './globals.css';
 
 const display = Plus_Jakarta_Sans({
@@ -8,11 +9,13 @@ const display = Plus_Jakarta_Sans({
   variable: '--font-display',
 });
 
-const spaceMono = Space_Mono({ 
-  weight: ['400', '700'], 
-  subsets: ['latin'],
+const spaceMono = localFont({
+  src: [
+    { path: '../public/fonts/SpaceMono-Regular.woff2', weight: '400' },
+    { path: '../public/fonts/SpaceMono-Bold.woff2', weight: '700' },
+  ],
+  variable: '--font-mono',
   display: 'swap',
-  preload: false,  // stops the build-time fetch
 });
 
 export const metadata: Metadata = {
@@ -22,7 +25,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${spaceMono}`}>
+    <html lang="en" className={`${display.variable} ${spaceMono.variable}`}>
       <body className="kz-display">{children}</body>
     </html>
   );
