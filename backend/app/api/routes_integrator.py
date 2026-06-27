@@ -33,6 +33,7 @@ import asyncpg
 from datetime import datetime, timezone, timedelta
 from loguru import logger
 from stellar_sdk import Keypair, Network, TransactionBuilder, SorobanServer, scval
+from stellar_sdk.soroban_rpc import GetTransactionStatus, SendTransactionStatus
 
 import asyncio
 from app.db.database import get_db
@@ -168,11 +169,12 @@ async def create_integrator(
     # In create_integrator — remove the keypair= kwarg
     if settings.KYC_REGISTRY_CONTRACT_ID and settings.SPONSOR_STELLAR_SECRET:
         try:
+            keypair = Keypair.from_secret(settings.SPONSOR_STELLAR_SECRET.strip())
             await _register_integrator_on_chain(
                 integrator_id_hex=body.integrator_id_hex,
                 min_age_seconds=min_age_seconds,
                 doc_max_age_seconds=doc_max_age_seconds,
-                # no keypair kwarg here
+                keypair=keypair,
             )
             logger.info(f"On-chain registration succeeded for {body.integrator_id_hex}")
         except Exception as e:
@@ -196,10 +198,8 @@ async def _register_integrator_on_chain(
     integrator_id_hex: str,
     min_age_seconds: int,
     doc_max_age_seconds: int,
+    keypair: Keypair,                              # add this
 ):
-    secret = settings.SPONSOR_STELLAR_SECRET.strip()
-    logger.info(f"Secret length: {len(secret)}, starts with: {repr(secret[:4])}")
-    keypair = Keypair.from_secret(secret)          # single init, correct name
     server = SorobanServer(settings.STELLAR_RPC_URL)
 
     account = await asyncio.get_event_loop().run_in_executor(
@@ -213,14 +213,23 @@ async def _register_integrator_on_chain(
             function_name="register_integrator",
             parameters=[
                 scval.to_bytes(bytes.fromhex(integrator_id_hex)),
-                scval.to_uint32(min_age_seconds),
+                scval.to_address(keypair.public_key),
+                scval.to_uint64(min_age_seconds),
                 scval.to_bytes(bytes.fromhex("0" * 64)),
-                scval.to_uint32(doc_max_age_seconds),
+                scval.to_uint64(doc_max_age_seconds),
             ],
         )
         .set_timeout(30)
         .build()
     )
+
+    # Simulate first to get the real error
+    sim_result = await asyncio.get_event_loop().run_in_executor(
+        None, server.simulate_transaction, tx
+    )
+    if sim_result.error:
+        logger.error(f"Simulation error for {integrator_id_hex}: {sim_result.error}")
+        raise Exception(f"Simulation failed: {sim_result.error}")
 
     prepared = await asyncio.get_event_loop().run_in_executor(
         None, server.prepare_transaction, tx
@@ -231,22 +240,25 @@ async def _register_integrator_on_chain(
         None, server.send_transaction, prepared
     )
 
-    if result.status == "ERROR":
+    logger.info(f"Transaction submitted: {result.hash}, status: {result.status}")
+
+    if result.status == SendTransactionStatus.ERROR:
         raise Exception(f"Transaction error: {result.error_result_xdr}")
 
-    # Poll for confirmation
-    for _ in range(10):
+    for i in range(20):
         await asyncio.sleep(2)
         status = await asyncio.get_event_loop().run_in_executor(
             None, server.get_transaction, result.hash
         )
-        if status.status == "SUCCESS":
+        logger.info(f"Poll {i+1}: {result.hash} → {status.status}")
+        if status.status == GetTransactionStatus.SUCCESS:
+            logger.info(f"On-chain confirmed: {result.hash}")
             return result.hash
-        if status.status == "FAILED":
+        if status.status == GetTransactionStatus.FAILED:
+            logger.error(f"Transaction FAILED: {result.hash}")
             raise Exception(f"Transaction failed: {result.hash}")
 
-    raise Exception("On-chain registration timed out")
-
+    raise Exception(f"On-chain registration timed out after 40s. Last hash: {result.hash}")
 
 @router.get("/public/{integrator_id}")
 async def get_public_integrator_info(
