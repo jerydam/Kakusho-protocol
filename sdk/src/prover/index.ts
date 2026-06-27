@@ -84,7 +84,7 @@ export function generateProof(
   options: ProveOptions = {}
 ): Promise<KycProofResult> {
   return new Promise((resolve, reject) => {
-const workerUrl = options.workerUrl ?? new URL("./snarkjs_worker.ts", import.meta.url);
+const workerUrl = options.workerUrl ?? new URL("./kakusho-prover-worker.js", import.meta.url);
 
 const worker = new Worker(workerUrl, { type: "module" });
 

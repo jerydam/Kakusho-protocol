@@ -8,10 +8,11 @@ const display = Plus_Jakarta_Sans({
   variable: '--font-display',
 });
 
-const mono = Space_Mono({
+const spaceMono = Space_Mono({ 
+  weight: ['400', '700'], 
   subsets: ['latin'],
-  weight: ['400', '700'],
-  variable: '--font-mono',
+  display: 'swap',
+  preload: false,  // stops the build-time fetch
 });
 
 export const metadata: Metadata = {
@@ -21,7 +22,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${display.variable} ${mono.variable}`}>
+    <html lang="en" className={`${display.variable} ${spaceMono}`}>
       <body className="kz-display">{children}</body>
     </html>
   );
