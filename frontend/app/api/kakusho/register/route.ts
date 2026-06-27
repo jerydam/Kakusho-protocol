@@ -41,8 +41,11 @@ export async function POST(req: NextRequest) {
   });
 
   if (!relayerRes.ok) {
-    return NextResponse.json(await relayerRes.json(), { status: relayerRes.status });
-  }
+  const text = await relayerRes.text();          // read as text first
+  let detail = 'Registration failed';
+  try { detail = JSON.parse(text).detail; } catch {}
+  return NextResponse.json({ detail }, { status: relayerRes.status });
+}
 
   const data = await relayerRes.json();
   apiKeyCache.set(data.id, data.api_key);

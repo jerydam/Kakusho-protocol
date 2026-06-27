@@ -198,6 +198,9 @@ async def _register_integrator_on_chain(
     min_age_seconds: int,
     doc_max_age_seconds: int,
 ):
+    secret = settings.SPONSOR_STELLAR_SECRET
+    logger.info(f"Secret length: {len(secret)}, repr: {repr(secret[:10])}...")
+    keypair = Keypair.from_secret(secret.strip())
     server = SorobanServer(settings.STELLAR_RPC_URL)
     keypair = Keypair.from_secret(settings.BACKEND_STELLAR_SECRET)
 
