@@ -13,7 +13,7 @@ from app.api.routes_proof import router as proof_router
 from app.api.routes_sessions import router as sessions_router
 from app.api.routes_nfc import router as nfc_router
 from app.api.routes_credential import router as credential_router
-
+from app.routes.ocr import router as ocr_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -47,6 +47,7 @@ app.include_router(proof_router)
 app.include_router(sessions_router)
 app.include_router(nfc_router)
 app.include_router(credential_router)   # ← new
+app.include_router(ocr_router)
 
 
 @app.get("/health")
