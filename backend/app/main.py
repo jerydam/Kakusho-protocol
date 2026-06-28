@@ -11,6 +11,9 @@ from app.db.database import create_pool, close_pool
 from app.api.routes_integrator import router as integrator_router
 from app.api.routes_proof import router as proof_router
 from app.api.routes_sessions import router as sessions_router
+from app.api.routes_nfc import router as nfc_router
+from app.api.routes_credential import router as credential_router
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,6 +21,7 @@ async def lifespan(app: FastAPI):
     await create_pool()
     logger.info(f"DB pool ready. Network: {settings.STELLAR_NETWORK}")
     logger.info(f"Contract: {settings.KYC_REGISTRY_CONTRACT_ID}")
+    logger.info(f"Self integrator: {settings.KAKUSHO_SELF_INTEGRATOR_ID or 'NOT SET'}")
     yield
     logger.info("Shutting down...")
     await close_pool()
@@ -41,6 +45,9 @@ app.add_middleware(
 app.include_router(integrator_router)
 app.include_router(proof_router)
 app.include_router(sessions_router)
+app.include_router(nfc_router)
+app.include_router(credential_router)   # ← new
+
 
 @app.get("/health")
 async def health():
@@ -48,4 +55,5 @@ async def health():
         "status": "ok",
         "network": settings.STELLAR_NETWORK,
         "contract": settings.KYC_REGISTRY_CONTRACT_ID,
+        "self_integrator_set": bool(settings.KAKUSHO_SELF_INTEGRATOR_ID),
     }

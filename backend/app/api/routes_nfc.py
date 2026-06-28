@@ -34,8 +34,10 @@ import json
 from enum import Enum
 from fastapi import APIRouter, Depends, HTTPException, Request
 from loguru import logger
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel, Field, field_validator
+import asyncio
+import subprocess
+from pathlib import Path
 from app.core.config import settings
 from app.db.database import get_db
 from app.services.nfc_verify import NFCVerificationError, verify_passive_auth
@@ -86,22 +88,9 @@ class NFCVerifyResponse(BaseModel):
     integrator_id: str
 
 
+
+
 class NFCProofSubmitPayload(BaseModel):
-    """
-    Sent by the frontend after generating a ZK proof from the NFC witness.
-    Same structure as the OCR proof submission — proof_a/b/c + public signals.
-
-    public_signals is a list of hex-encoded 32-byte field elements. For the
-    nfc_chip_verify circuit with the current template, there are 3 public signals:
-      [0] chip_commitment (output)
-      [1] nullifier (output)
-      [2] current_timestamp
-
-    Plus the 256-bit sod_dg1_hash is packed into the public signal list as
-    8 × 32-byte chunks by nfc_witness_builder.ts — see that file's comment
-    for the packing scheme. Adjust public_signals ordering to match whatever
-    snarkjs produces for the compiled circuit.
-    """
     integrator_id: str
     nullifier_hex: str
     current_timestamp: int
@@ -109,6 +98,16 @@ class NFCProofSubmitPayload(BaseModel):
     proof_b_hex: str
     proof_c_hex: str
     public_signals_hex: list[str]
+
+    @field_validator('public_signals_hex')
+    @classmethod
+    def must_have_260_signals(cls, v):
+        if len(v) != 260:
+            raise ValueError(
+                f'Circuit nPublic=260 requires exactly 260 public signals, got {len(v)}'
+            )
+        return v
+    
 class DocumentType(str, Enum):
     PASSPORT = "passport"
     NATIONAL_ID = "national_id"
@@ -120,7 +119,25 @@ class NFCPolicy(str, Enum):
     REQUIRED_FOR_PASSPORT = "required_for_passport"     # default — ICAO chip docs only
     ALWAYS_REQUIRED = "always_required"                 # every accepted document type must use NFC
     NEVER = "never"                                     # NFC path disabled entirely for this integrator
- 
+class GenerateProofRequest(BaseModel):
+    integrator_id: str        # hex form (for display/DB)
+    integrator_id_field: str  # field element form (sha256ToFieldElement on mobile)
+    dg1_hash_hex: str         # SHA-256 of DG1 bytes as hex
+    sod_dg1_hash_hex: str     # SOD hash as hex
+    document_no_hash: str     # sha256ToFieldElement(result.documentNo)
+    user_secret: str          # user's secret scalar — generated on device
+    dob_timestamp: str        # date of birth as Unix seconds string
+    doc_issue_timestamp: str  # issue date as Unix seconds string  
+    country_code: str         # numeric ISO 3166-1 as string
+    timestamp: str            # current Unix seconds
+
+
+class GenerateProofResponse(BaseModel):
+    proof_a_hex: str
+    proof_b_hex: str
+    proof_c_hex: str
+    public_signals_hex: list[str]
+    nullifier_hex: str
  
 DEFAULT_ALLOWED_DOCUMENT_TYPES = [DocumentType.PASSPORT.value]
 DEFAULT_NFC_POLICY = NFCPolicy.REQUIRED_FOR_PASSPORT.value
@@ -188,7 +205,91 @@ def nfc_required(document_type: str, integrator: dict) -> bool:
     # not whether a proof is required at all.
     return False
  
+@router.post("/generate-proof", response_model=GenerateProofResponse)
+async def generate_nfc_proof(
+    payload: GenerateProofRequest,
+    db=Depends(get_db),
+):
+    """
+    Step 1.5 of NFC verification: server-side Groth16 proof generation.
 
+    Replaces on-device snarkjs.groth16.fullProve — which fails on Android
+    due to missing Node built-ins in the Hermes JS runtime.
+
+    Only chip hashes (already computed by /verify-chip) are received here.
+    Raw DG1/biometric bytes never leave the device, preserving the privacy
+    guarantee stated in the app UI.
+
+    Calls scripts/prove.js via subprocess — a thin Node sidecar that runs
+    snarkjs fullProve and returns the encoded proof over stdout.
+
+    Prerequisites:
+      - node + snarkjs installed in the FastAPI container/venv
+      - zk/nfc_chip_verify.wasm and zk/nfc_chip_verify_final.zkey present
+        relative to the project root (same files previously bundled in the app)
+    """
+    # Validate integrator is active before doing expensive proof work
+    integrator = await db.fetchrow(
+        "SELECT active FROM integrators WHERE id = $1",
+        payload.integrator_id,
+    )
+    if not integrator:
+        raise HTTPException(status_code=404, detail="Integrator not found")
+    if not integrator["active"]:
+        raise HTTPException(status_code=403, detail="Integrator is inactive")
+
+    witness = {
+        "dg1_hash":      payload.dg1_hash_hex,
+        "sod_dg1_hash":  payload.sod_dg1_hash_hex,
+        "integrator_id": payload.integrator_id,
+        "document_no":   payload.document_no_hash,
+        "timestamp":     payload.timestamp,
+    }
+
+    prove_script = Path(__file__).parent.parent.parent / "scripts" / "prove.js"
+    if not prove_script.exists():
+        logger.error(f"prove.js not found at {prove_script}")
+        raise HTTPException(status_code=500, detail="Proof generation script not configured")
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "node", str(prove_script),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=json.dumps(witness).encode()),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Proof generation timed out (>120s)")
+    except FileNotFoundError:
+        raise HTTPException(status_code=500, detail="node not found — install Node.js in the server environment")
+
+    if proc.returncode != 0:
+        err = stderr.decode().strip()
+        logger.error(f"prove.js failed (integrator={payload.integrator_id}): {err}")
+        raise HTTPException(status_code=500, detail=f"Proof generation failed: {err}")
+
+    try:
+        result = json.loads(stdout.decode())
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Proof script returned invalid JSON: {e}")
+
+    logger.info(
+        f"ZK proof generated server-side: integrator={payload.integrator_id}, "
+        f"nullifier={result.get('nullifier_hex', '')[:16]}..."
+    )
+
+    return GenerateProofResponse(
+        proof_a_hex=result["proof_a_hex"],
+        proof_b_hex=result["proof_b_hex"],
+        proof_c_hex=result["proof_c_hex"],
+        public_signals_hex=result["public_signals_hex"],
+        nullifier_hex=result["nullifier_hex"],
+    )
+    
 @router.post("/verify-chip", response_model=NFCVerifyResponse)
 async def verify_nfc_chip(
     payload: NFCChipPayload,
